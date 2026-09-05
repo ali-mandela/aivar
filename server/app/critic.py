@@ -52,6 +52,29 @@ def _has_login_keywords(text: str) -> bool:
     return any(keyword in norm for keyword in login_keywords)
 
 
+def _url_key(url: str | None) -> str:
+    """Compare URLs by origin and path, ignoring query and fragment."""
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+
+        parts = urlparse(url)
+        return f"{parts.netloc}{(parts.path or '/').rstrip('/') or '/'}".lower()
+    except Exception:
+        return url.lower()
+
+
+def _form_signature(form) -> str:
+    """Identify a form by its field names rather than the page it sits on.
+
+    The same footer subscribe box on eight pages is one form to a person, and
+    counting it eight times drowns the real gaps.
+    """
+    fields = ",".join(sorted(_normalize_text(f.name) for f in form.fields))
+    return f"{_normalize_text(form.name)}|{fields}|{form.is_login}"
+
+
 def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
     """
     Compute coverage gaps without any model call.
@@ -70,6 +93,14 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
         List of Gap objects
     """
     gaps: list[Gap] = []
+
+    # The URLs flows actually start on. A flow with entry_url set to /contact is
+    # testing /contact whatever its step wording happens to be; matching only on
+    # text meant a plan could cover a page thoroughly and still be reported as
+    # ignoring it, which sent a good plan back for re-planning.
+    covered_urls = {
+        _url_key(flow.entry_url) for flow in plan.flows if flow.entry_url
+    }
 
     # Collect all step targets from all flows (lowercase, normalized)
     all_step_targets = set()
@@ -90,15 +121,38 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
     # 1. normalized tokens of form's NAME overlap a step target
     # 2. normalized tokens of ANY form's FIELD names overlap a step target (important!)
     # 3. form is login form and any flow has step whose target contains login keywords
+    # A form in the site-wide chrome -- a newsletter box in the footer, a search
+    # field in the header -- is observed once per page crawled. Counted per page
+    # it produced six "untested form" gaps for one form, which on its own was
+    # enough to fail the gate and burn the re-plan budget on a plan that had
+    # merely not tested a newsletter signup.
+    seen_form_signatures: set[str] = set()
+
     for page in report.pages:
         for form in page.forms:
+            signature = _form_signature(form)
+            if signature in seen_form_signatures:
+                continue
+            seen_form_signatures.add(signature)
+
             found = False
 
+            # Check 0: a flow starts on this page and types into something.
+            # Landing on the page and filling a field is what testing a form is.
+            if _url_key(page.url) in covered_urls:
+                for flow in plan.flows:
+                    if _url_key(flow.entry_url) != _url_key(page.url):
+                        continue
+                    if any(s.verb in ("fill", "select", "check") for s in flow.steps):
+                        found = True
+                        break
+
             # Check 1: form name is referenced by any step target
-            for step_target in all_step_targets:
-                if _text_overlap(form.name, step_target):
-                    found = True
-                    break
+            if not found:
+                for step_target in all_step_targets:
+                    if _text_overlap(form.name, step_target):
+                        found = True
+                        break
 
             # Check 2: ANY field name overlaps a step target (field names are real evidence of coverage)
             if not found:
@@ -141,8 +195,12 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
     for page in report.pages:
         page_found = False
 
+        # A flow that starts here is testing here, regardless of its wording.
+        if _url_key(page.url) in covered_urls:
+            page_found = True
+
         # Check if page title appears in any flow
-        if page.title and _text_overlap(page.title, " ".join(all_flow_text)):
+        if not page_found and page.title and _text_overlap(page.title, " ".join(all_flow_text)):
             page_found = True
 
         # Check if any heading appears in any flow
@@ -387,9 +445,14 @@ Be strict about critical and serious gaps. Only mark gaps you're confident about
         gap_summary = f"Found {len(merged_gaps)} coverage gaps" if merged_gaps else "No coverage gaps found"
         reasoning = f"structural {structural_score:.2f} / overall {score:.2f} - {gap_summary}"
 
+    # Report the structural score, because it is the one the verdict was made
+    # from. The overall score is dragged down by the model's wish-list, which is
+    # deliberately not allowed to decide anything -- publishing it as *the* score
+    # produced runs reading "verdict ACCEPT, score 0.00", which tells a reader
+    # the gate is broken. Both numbers stay visible in `reasoning`.
     assessment = CoverageAssessment(
         verdict=verdict,
-        score=score,
+        score=structural_score,
         gaps=merged_gaps,
         reasoning=reasoning,
         replan_instruction=model_replan_instruction,
