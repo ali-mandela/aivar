@@ -7,9 +7,29 @@ from typing import Callable
 from app.browser import Node
 from app.contracts.contracts import FlowKind, PlanMode, TestPlan, Flow
 from app.llm import LLMConfig, LLMInvalidJSON, LLMResponse, chat_json, extract_json
-from app.models.models import StepKind, Step, Verb
+from app.models.models import (
+    ASSERTION_VERBS,
+    VALUE_ASSERTION_VERBS,
+    StepKind,
+    Step,
+    Verb,
+)
 
 logger = logging.getLogger("aivar")
+
+# Kept in step with the Verb literal in models.py: every verb the browser,
+# codegen and executor know how to carry out.
+VALID_VERBS: tuple[str, ...] = (
+    "click",
+    "fill",
+    "select",
+    "check",
+    "press",
+    "wait_visible",
+    "assert_text",
+    "assert_url",
+    "assert_hidden",
+)
 
 
 PLAN_SYSTEM = """You are a test automation expert. Your task is to generate a test plan as a JSON object with the following structure:
@@ -74,9 +94,9 @@ def validate_plan(raw: dict) -> list[PlannedStep]:
 
         # Validate verb
         verb = step_dict.get("verb")
-        if verb not in ("click", "fill", "wait_visible"):
+        if verb not in VALID_VERBS:
             raise PlanValidationError(
-                f"Step {i}: verb must be one of 'click', 'fill', 'wait_visible', got '{verb}'"
+                f"Step {i}: verb must be one of {', '.join(VALID_VERBS)}, got '{verb}'"
             )
 
         # Validate target
@@ -87,10 +107,15 @@ def validate_plan(raw: dict) -> list[PlannedStep]:
         # Get value
         value = step_dict.get("value")
 
-        # Normalise assertions
+        # Normalise assertions. See the note in _validate_and_build_flows: only
+        # a verb that is not an assertion verb is corrected, so a model that
+        # names what it expects keeps saying it.
         if kind_str == "assertion":
-            verb = "wait_visible"
-            value = None
+            if verb not in ASSERTION_VERBS:
+                verb = "wait_visible"
+                value = None
+            elif verb not in VALUE_ASSERTION_VERBS:
+                value = None
             assertion_count += 1
 
         kind = StepKind(kind_str)
@@ -219,11 +244,11 @@ Generate a test plan to automate this intent."""
 
 def _validate_and_build_flows(
     raw_json: dict, max_flows: int
-) -> tuple[list[Flow], bool]:
+) -> tuple[list[Flow], bool, bool]:
     """
     Validate and build Flow objects from LLM response.
 
-    Returns (flows, is_happy_path_only).
+    Returns (flows, is_happy_path_only, has_value_assertion).
     Raises PlanValidationError on validation failure.
     """
     if "flows" not in raw_json or not isinstance(raw_json["flows"], list):
@@ -276,9 +301,10 @@ def _validate_and_build_flows(
 
             # Validate verb
             verb = step_dict.get("verb")
-            if verb not in ("click", "fill", "wait_visible"):
+            if verb not in VALID_VERBS:
                 raise PlanValidationError(
-                    f"Flow {flow_idx}, step {step_idx}: verb must be one of 'click', 'fill', 'wait_visible', got '{verb}'"
+                    f"Flow {flow_idx}, step {step_idx}: verb must be one of "
+                    f"{', '.join(VALID_VERBS)}, got '{verb}'"
                 )
 
             # Validate target
@@ -291,10 +317,21 @@ def _validate_and_build_flows(
             # Get value
             value = step_dict.get("value")
 
-            # Normalise assertions
+            # Normalise assertions.
+            #
+            # This used to force every assertion to wait_visible and drop its
+            # value, so a model answering with assert_url "/dashboard" had that
+            # rewritten to "is anything visible" before anyone saw it -- the
+            # plan looked like the model's own timidity when it was ours.
+            # Now only a verb that is not an assertion verb gets corrected.
             if step_kind_str == "assertion":
-                verb = "wait_visible"
-                value = None
+                if verb not in ASSERTION_VERBS:
+                    verb = "wait_visible"
+                    value = None
+                elif verb not in VALUE_ASSERTION_VERBS:
+                    # wait_visible and assert_hidden locate an element and
+                    # nothing more; a value on them means nothing.
+                    value = None
                 assertion_count += 1
 
             step_kind = StepKind(step_kind_str)
@@ -318,6 +355,15 @@ def _validate_and_build_flows(
 
         # Build flow object
         flow_id = f"f{flow_idx + 1}"
+
+        # Where this flow should start. Without it every flow opens at the entry
+        # URL and has to click its way to the screen under test, which is both
+        # longer and more fragile -- and it is what stops flows from being run
+        # independently of one another.
+        entry_url = flow_dict.get("entry_url")
+        if not isinstance(entry_url, str) or not entry_url.startswith(("http://", "https://")):
+            entry_url = None
+
         flows.append(
             Flow(
                 id=flow_id,
@@ -325,13 +371,25 @@ def _validate_and_build_flows(
                 description=description,
                 kind=kind,
                 steps=steps,
+                entry_url=entry_url,
             )
         )
 
     # Check if only happy paths
     is_happy_path_only = flow_kinds <= {FlowKind.HAPPY_PATH, FlowKind.NAVIGATION}
 
-    return flows, is_happy_path_only
+    # Whether the plan ever states what the app should say or where it should
+    # land, as opposed to only checking that something appeared. A suite whose
+    # every assertion is wait_visible passes against an app showing the wrong
+    # page entirely, so this is the difference between a plan that would catch a
+    # regression and one that would not.
+    has_value_assertion = any(
+        s.verb in ("assert_text", "assert_url")
+        for f in flows
+        for s in f.steps
+    )
+
+    return flows, is_happy_path_only, has_value_assertion
 
 
 def plan_flows(
@@ -366,23 +424,93 @@ def plan_flows(
         PlanValidationError: If the response is invalid or retry also fails
     """
     # Build system prompt
-    system = f"""You are a test automation expert. Your task is to generate multiple test flows as a JSON object with the following structure:
+    system = f"""You are a senior QA engineer writing end-to-end tests by hand, the way a careful person would after clicking through the app themselves.
+
+Return a JSON object with this structure:
 
 ```json
-{{"flows":[{{"name":"...","description":"...","kind":"happy_path|negative|edge_case|error_state|navigation","steps":[{{"kind":"action|assertion","verb":"click|fill|wait_visible","target":"...","value":null}}]}}]}}
+{{"flows":[{{"name":"...","description":"...","entry_url":"...","kind":"happy_path|negative|edge_case|error_state|navigation","steps":[{{"kind":"action|assertion","verb":"...","target":"...","value":null}}]}}]}}
 ```
+
+Verbs available:
+
+ACTIONS
+- "click"  - press a button or link
+- "fill"   - type into a text field ("value" is the text)
+- "select" - choose an option in a dropdown ("value" is the visible option label)
+- "check"  - tick a checkbox or radio
+- "press"  - send a key ("value" is "Enter", "Tab" or "Escape")
+
+ASSERTIONS
+- "wait_visible"  - the element is on screen (value null)
+- "assert_text"   - the element contains this text ("value" is the expected text)
+- "assert_url"    - the address contains this fragment ("value" is e.g. "/dashboard"); "target" describes it in words
+- "assert_hidden" - the element is gone (value null)
 
 Rules you MUST follow:
 
-1. `kind` must be either "action" (modifies the page) or "assertion" (verifies something is visible).
-2. `verb` must be one of: "click", "fill", "wait_visible".
-3. An assertion ALWAYS uses verb "wait_visible" and value null.
-4. `target` is a 1–3 word description of the element, matching wording from the digest where possible.
-5. NEVER invent credentials. For username, email, or password fields, set value to null — credentials are injected separately.
-6. Every flow MUST end with at least one assertion.
-7. Produce between 3 and {max_flows} flows.
-8. Do not produce only happy paths. Include at least one `negative` or `error_state` flow (e.g. wrong password, empty required field, invalid input).
-9. Return ONLY valid JSON, no markdown, prose, or explanation."""
+1. `kind` is "action" (changes the page) or "assertion" (checks the page).
+2. `target` is a 1-3 word description of the element, reusing wording from the digest where possible.
+3. NEVER invent credentials. For username, email, or password fields set value to null - credentials are injected separately.
+4. Every flow MUST end with at least one assertion.
+5. Produce between 3 and {max_flows} flows.
+6. Do not produce only happy paths. Include at least one `negative` or `error_state` flow (wrong password, empty required field, invalid format).
+7. Return ONLY valid JSON, no markdown, prose, or explanation.
+
+Assertions - the part that decides whether this suite is worth anything:
+
+"wait_visible" only proves something appeared. An app that renders "Invalid
+credentials" where it should render a dashboard passes it. Use these instead:
+
+8. A flow whose last action navigates MUST end with "assert_url", value being
+   the path the user should land on (e.g. "/dashboard").
+9. A flow expecting a rejection or a validation failure MUST use "assert_text",
+   value being the message the user should see.
+10. A flow where something should disappear MUST use "assert_hidden".
+11. Use "wait_visible" only when appearing really is the whole point, and never
+    as the only assertion in a flow.
+
+Worked example - copy this shape:
+
+```json
+{{"flows":[
+ {{"name":"Sign in with valid credentials","description":"A registered user reaches their dashboard","entry_url":"https://example.com/login","kind":"happy_path",
+  "steps":[
+   {{"kind":"action","verb":"fill","target":"email field","value":null}},
+   {{"kind":"action","verb":"fill","target":"password field","value":null}},
+   {{"kind":"action","verb":"click","target":"Sign In","value":null}},
+   {{"kind":"assertion","verb":"assert_url","target":"dashboard address","value":"/dashboard"}},
+   {{"kind":"assertion","verb":"assert_hidden","target":"password field","value":null}}
+  ]}},
+ {{"name":"Reject a wrong password","description":"A bad password is refused with a message","entry_url":"https://example.com/login","kind":"negative",
+  "steps":[
+   {{"kind":"action","verb":"fill","target":"email field","value":null}},
+   {{"kind":"action","verb":"fill","target":"password field","value":null}},
+   {{"kind":"action","verb":"click","target":"Sign In","value":null}},
+   {{"kind":"assertion","verb":"assert_text","target":"error message","value":"Invalid"}}
+  ]}}
+]}}
+```
+
+Where a flow starts:
+
+Set `entry_url` to the URL from the digest where the flow should begin, so it
+starts on the right screen instead of clicking its way there from the home
+page. Use a URL that appears in the digest. Omit it only when the flow really
+does start at the entry page.
+
+Screens with no URL:
+
+A line reading "Opens in-page (dialog/panel, no URL change): X" means control X
+opens a dialog, drawer or panel without navigating. Reach it by clicking X, and
+assert on what it reveals. These are often the least-tested parts of an app.
+
+Test data:
+
+Use realistic values a person would actually type: "Alex Morgan",
+"alex@example.com", "+44 7700 900123". For edge_case flows use awkward but
+plausible input on purpose - a very long name, a leading space, an address with
+no @, an empty required field."""
 
     # Append mode-specific instructions
     if mode == PlanMode.SWEEP:
@@ -424,7 +552,9 @@ Generate {max_flows} test flows to validate this application."""
     # repair once by telling it exactly what it got wrong before giving up.
     try:
         raw_json = extract_json(response.content)
-        flows, is_happy_path_only = _validate_and_build_flows(raw_json, max_flows)
+        flows, is_happy_path_only, has_value_assertion = _validate_and_build_flows(
+            raw_json, max_flows
+        )
     except (PlanValidationError, LLMInvalidJSON) as first_error:
         logger.info("plan rejected (%s) - repairing once", first_error)
         repair = (
@@ -435,10 +565,16 @@ Generate {max_flows} test flows to validate this application."""
         )
         response = chat_json(system, user_message + "\n\n" + repair, config)
         raw_json = extract_json(response.content)
-        flows, is_happy_path_only = _validate_and_build_flows(raw_json, max_flows)
+        flows, is_happy_path_only, has_value_assertion = _validate_and_build_flows(
+            raw_json, max_flows
+        )
 
-    # In SWEEP mode, retry once if only happy paths
-    if mode == PlanMode.SWEEP and is_happy_path_only:
+    # Retry once if the plan is all happy paths.
+    #
+    # This used to apply to SWEEP alone, so a FOCUSED or SPEC_LED run could
+    # return nothing but happy paths unchallenged. "not just happy paths" is a
+    # requirement of the brief in every mode, not a property of sweeping.
+    if is_happy_path_only:
         retry_instruction = (
             "Previous attempt produced only happy-path and navigation flows. "
             "You MUST include at least one flow with kind 'negative' or 'error_state'. "
@@ -447,14 +583,50 @@ Generate {max_flows} test flows to validate this application."""
         retry_system = system + f"\n\n{retry_instruction}"
         response = chat_json(retry_system, user_message, config)
         raw_json = extract_json(response.content)
-        flows, is_happy_path_only = _validate_and_build_flows(raw_json, max_flows)
+        flows, is_happy_path_only, has_value_assertion = _validate_and_build_flows(
+            raw_json, max_flows
+        )
 
         # If still happy-path only, raise error
         if is_happy_path_only:
             raise PlanValidationError(
-                "SWEEP mode requires at least one negative or error_state flow. "
+                "A plan requires at least one negative or error_state flow. "
                 "Retried once but response still contained only happy paths."
             )
+
+    # Retry once if nothing in the plan checks a value.
+    #
+    # Told to prefer assert_text and assert_url, a smaller model still reaches
+    # for wait_visible every time -- it satisfies the letter of "end with an
+    # assertion" while proving almost nothing. Asking again with the specific
+    # complaint is cheaper than accepting a suite that passes against a broken
+    # app, and mirrors how the happy-path gate above works: state the rule in
+    # the prompt, then enforce it in Python.
+    if not has_value_assertion:
+        logger.info("plan has no value assertion - asking once more")
+        sharpen = (
+            "Your previous plan checked only that elements were visible. That "
+            "passes even when the application shows the wrong page or the wrong "
+            "message. Revise it so that at least half the flows end in an "
+            "'assert_url' (naming the path the user should land on) or an "
+            "'assert_text' (naming the message the user should see). Keep the "
+            "same flows and the same coverage; only make the assertions state "
+            "what should actually be true."
+        )
+        try:
+            response = chat_json(system, user_message + "\n\n" + sharpen, config)
+            raw_json = extract_json(response.content)
+            retry_flows, retry_happy_only, retry_has_value = _validate_and_build_flows(
+                raw_json, max_flows
+            )
+            # Only take the retry if it is genuinely better. A second attempt
+            # that regressed to happy paths, or still asserts nothing, is worse
+            # than the plan already in hand.
+            if retry_has_value and not retry_happy_only:
+                flows = retry_flows
+        except (PlanValidationError, LLMInvalidJSON) as e:
+            # The first plan was valid. Keep it rather than fail the run.
+            logger.info("assertion-sharpening retry failed (%s) - keeping first plan", e)
 
     # Build TestPlan
     plan = TestPlan(
