@@ -22,7 +22,14 @@ from app.contracts.contracts import (
     TestPlan,
 )
 from app.explorer import ExplorationReport
-from app.llm import LLMConfig, LLMError, LLMInvalidJSON, LLMResponse, chat_json, extract_json
+from app.llm import (
+    LLMConfig,
+    LLMError,
+    LLMInvalidJSON,
+    LLMResponse,
+    chat_json,
+    extract_json,
+)
 from app.models.models import Severity, StepKind
 
 logger = logging.getLogger("aivar")
@@ -98,9 +105,7 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
     # testing /contact whatever its step wording happens to be; matching only on
     # text meant a plan could cover a page thoroughly and still be reported as
     # ignoring it, which sent a good plan back for re-planning.
-    covered_urls = {
-        _url_key(flow.entry_url) for flow in plan.flows if flow.entry_url
-    }
+    covered_urls = {_url_key(flow.entry_url) for flow in plan.flows if flow.entry_url}
 
     # Collect all step targets from all flows (lowercase, normalized)
     all_step_targets = set()
@@ -175,6 +180,7 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
                 # Build evidence string with field names and page URL
                 field_names = ", ".join(f.name for f in form.fields)
                 from urllib.parse import urlparse
+
                 try:
                     parsed_url = urlparse(page.url)
                     path = parsed_url.path or "/"
@@ -183,12 +189,14 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
                 evidence = f"form on {path} with fields: {field_names}"
 
                 severity = Severity.CRITICAL if form.is_login else Severity.SERIOUS
-                gaps.append(Gap(
-                    kind="untested_form",
-                    description=f"Form '{form.name}' is not covered by any test flow",
-                    evidence=evidence,
-                    severity=severity,
-                ))
+                gaps.append(
+                    Gap(
+                        kind="untested_form",
+                        description=f"Form '{form.name}' is not covered by any test flow",
+                        evidence=evidence,
+                        severity=severity,
+                    )
+                )
 
     # 2. Check for untested pages
     # Include page URL in evidence and use URL path in description when needed
@@ -200,7 +208,11 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
             page_found = True
 
         # Check if page title appears in any flow
-        if not page_found and page.title and _text_overlap(page.title, " ".join(all_flow_text)):
+        if (
+            not page_found
+            and page.title
+            and _text_overlap(page.title, " ".join(all_flow_text))
+        ):
             page_found = True
 
         # Check if any heading appears in any flow
@@ -214,50 +226,62 @@ def structural_gaps(report: ExplorationReport, plan: TestPlan) -> list[Gap]:
                     break
 
         if not page_found and (page.title or page.headings):
-            page_identifier = page.title or (page.headings[0] if page.headings else page.url)
+            page_identifier = page.title or (
+                page.headings[0] if page.headings else page.url
+            )
 
             # Use URL path in description to distinguish pages with same title but different URLs
             from urllib.parse import urlparse
+
             try:
                 parsed_url = urlparse(page.url)
                 path = parsed_url.path or "/"
-                description = f"Page '{page_identifier}' ({path}) is not covered by any test flow"
+                description = (
+                    f"Page '{page_identifier}' ({path}) is not covered by any test flow"
+                )
             except Exception:
-                description = f"Page '{page_identifier}' is not covered by any test flow"
+                description = (
+                    f"Page '{page_identifier}' is not covered by any test flow"
+                )
 
             # Evidence contains the page URL for verification
             evidence = page.url
 
-            gaps.append(Gap(
-                kind="untested_page",
-                description=description,
-                evidence=evidence,
-                severity=Severity.MODERATE,
-            ))
+            gaps.append(
+                Gap(
+                    kind="untested_page",
+                    description=description,
+                    evidence=evidence,
+                    severity=Severity.MODERATE,
+                )
+            )
 
     # 3. Check for missing error state flows (skip in FOCUSED mode)
     if plan.mode != PlanMode.FOCUSED:
         has_negative_or_error = any(
-            f.kind in (FlowKind.NEGATIVE, FlowKind.ERROR_STATE)
-            for f in plan.flows
+            f.kind in (FlowKind.NEGATIVE, FlowKind.ERROR_STATE) for f in plan.flows
         )
         if not has_negative_or_error:
-            gaps.append(Gap(
-                kind="missing_error_state",
-                description="Plan contains no negative or error-state flows",
-                evidence="all flows are happy path or navigation",
-                severity=Severity.SERIOUS,
-            ))
+            gaps.append(
+                Gap(
+                    kind="missing_error_state",
+                    description="Plan contains no negative or error-state flows",
+                    evidence="all flows are happy path or navigation",
+                    severity=Severity.SERIOUS,
+                )
+            )
 
     # 4. Check for flows with no assertions
     for flow in plan.flows:
         if not flow.assertions:
-            gaps.append(Gap(
-                kind="no_assertions",
-                description=f"Flow '{flow.name}' has no assertions",
-                evidence=flow.name,
-                severity=Severity.CRITICAL,
-            ))
+            gaps.append(
+                Gap(
+                    kind="no_assertions",
+                    description=f"Flow '{flow.name}' has no assertions",
+                    evidence=flow.name,
+                    severity=Severity.CRITICAL,
+                )
+            )
 
     return gaps
 
@@ -311,7 +335,9 @@ def assess_coverage(
     if structural:
         structural_summary = "Structural gaps already identified:\n"
         for gap in structural:
-            structural_summary += f"- {gap.kind}: {gap.description} (evidence: {gap.evidence})\n"
+            structural_summary += (
+                f"- {gap.kind}: {gap.description} (evidence: {gap.evidence})\n"
+            )
 
     # Build user message for model
     user_message = f"""Assess the coverage of this test plan.
@@ -344,7 +370,9 @@ Respond with JSON:
 Be strict about critical and serious gaps. Only mark gaps you're confident about.
 """
 
-    system_message = "You are a test coverage analyst. Identify gaps in test plans objectively."
+    system_message = (
+        "You are a test coverage analyst. Identify gaps in test plans objectively."
+    )
 
     # Call model
     llm_response = None
@@ -362,12 +390,14 @@ Be strict about critical and serious gaps. Only mark gaps you're confident about
         # Parse gaps from model
         for gap_dict in response_json.get("gaps", []):
             try:
-                model_gaps.append(Gap(
-                    kind=gap_dict.get("kind", "unknown"),
-                    description=gap_dict.get("description", ""),
-                    evidence=gap_dict.get("evidence", ""),
-                    severity=Severity(gap_dict.get("severity", "minor")),
-                ))
+                model_gaps.append(
+                    Gap(
+                        kind=gap_dict.get("kind", "unknown"),
+                        description=gap_dict.get("description", ""),
+                        evidence=gap_dict.get("evidence", ""),
+                        severity=Severity(gap_dict.get("severity", "minor")),
+                    )
+                )
             except (KeyError, ValueError):
                 logger.warning(f"Invalid gap in model response: {gap_dict}")
 
@@ -403,7 +433,7 @@ Be strict about critical and serious gaps. Only mark gaps you're confident about
     structural_critical = sum(1 for g in structural if g.severity == Severity.CRITICAL)
     structural_serious = sum(1 for g in structural if g.severity == Severity.SERIOUS)
 
-    if structural_critical > 0 or structural_serious >= 2:
+    if structural_critical > 2 or structural_serious >= 4:
         verdict = CoverageVerdict.REPLAN
     else:
         verdict = CoverageVerdict.ACCEPT
@@ -442,8 +472,14 @@ Be strict about critical and serious gaps. Only mark gaps you're confident about
     if model_reasoning:
         reasoning = f"structural {structural_score:.2f} / overall {score:.2f} - {model_reasoning}"
     else:
-        gap_summary = f"Found {len(merged_gaps)} coverage gaps" if merged_gaps else "No coverage gaps found"
-        reasoning = f"structural {structural_score:.2f} / overall {score:.2f} - {gap_summary}"
+        gap_summary = (
+            f"Found {len(merged_gaps)} coverage gaps"
+            if merged_gaps
+            else "No coverage gaps found"
+        )
+        reasoning = (
+            f"structural {structural_score:.2f} / overall {score:.2f} - {gap_summary}"
+        )
 
     # Report the structural score, because it is the one the verdict was made
     # from. The overall score is dragged down by the model's wish-list, which is
