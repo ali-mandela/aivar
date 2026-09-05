@@ -44,7 +44,7 @@ def health() -> dict:
         from app.llm import LLMConfig
 
         cfg = LLMConfig.from_env()
-        out["llm"] = {"configured": True, "models": list(cfg.models)}
+        out["llm"] = {"configured": True, **cfg.describe()}
     except Exception as e:
         out["llm"] = {"configured": False, "reason": f"{type(e).__name__}: {e}"}
 
