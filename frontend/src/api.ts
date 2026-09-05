@@ -243,3 +243,32 @@ export async function uploadPrd(file: File): Promise<PrdUpload> {
 /** Report artifacts are served as files, so link to them directly. */
 export const reportHtmlUrl = (runId: string) => `/api/runs/${runId}/report.html`;
 export const reportJsonUrl = (runId: string) => `/api/runs/${runId}/report.json`;
+
+/** Fetch an artifact as text.
+ *
+ *  A run can exist with no report on disk -- the artifacts directory is not
+ *  the database, and a run whose REPORT stage never completed leaves a test
+ *  snapshot behind with no report beside it. Pointing an iframe or a download
+ *  link straight at the URL renders the 404 body as though it were the
+ *  report, so the caller has to know whether the file is actually there. */
+async function artifactText(url: string, what: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new ApiError(`Cannot reach the API server to load the ${what}.`, 0);
+  }
+  if (res.status === 404) {
+    throw new ApiError(`This run has no ${what} on disk.`, 404);
+  }
+  if (!res.ok) {
+    throw new ApiError(`${res.status} ${res.statusText}`, res.status);
+  }
+  return res.text();
+}
+
+export const getReportHtml = (runId: string) =>
+  artifactText(reportHtmlUrl(runId), "HTML report");
+
+export const getReportJson = (runId: string) =>
+  artifactText(reportJsonUrl(runId), "JSON report");
