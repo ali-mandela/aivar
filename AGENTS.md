@@ -175,7 +175,7 @@ cd server
 uv sync                                    # install
 uv run playwright install chromium         # browser binary, first time only
 uv run serve                               # serve (see note below)
-uv run pytest tests/generated              # run a generated suite
+uv run pytest ../tests/generated           # run a generated suite
 ```
 
 Start the server with `uv run serve`, not with `uvicorn` directly. The

@@ -17,3 +17,9 @@ venv/
 server/artifacts/
 server/tests/generated/
 server/quarantine/
+
+# Run outputs now land at the repo root, outside the server package
+artifacts/
+tests/generated/
+quarantine/
+uploads/

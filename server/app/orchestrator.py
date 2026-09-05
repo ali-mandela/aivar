@@ -39,7 +39,7 @@ from app.executor import run_test
 from app.explorer import _settle, explore, dismiss_consent, ExplorationReport
 from app.llm import LLMConfig, LLMError
 from app.models.models import CompiledTest, RunResult, Severity, StepKind
-from app.paths import resolve_out_dir
+from app.paths import resolve_generated_dir, resolve_out_dir
 from app.planner import plan_flows
 from app.report import PipelineReport, render_pipeline_text, write_pipeline_report
 from app.healer import rerank
@@ -1279,7 +1279,8 @@ def run_pipeline(
     config = replace(
         config,
         out_dir=str(resolve_out_dir(config.out_dir)),
-        generated_dir=str(resolve_out_dir(config.generated_dir)),
+        # Outside the server directory on purpose -- see resolve_generated_dir.
+        generated_dir=str(resolve_generated_dir(config.generated_dir)),
         quarantine_dir=str(resolve_out_dir(config.quarantine_dir)),
     )
 

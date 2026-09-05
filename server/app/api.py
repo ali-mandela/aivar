@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.contracts.contracts import Decision
 from app.llm import LLMConfig, LLMError
 from app.orchestrator import OrchestratorConfig, run_pipeline
-from app.paths import resolve_out_dir
+from app.paths import resolve_generated_dir, resolve_out_dir
 
 logger = logging.getLogger("aivar")
 
@@ -458,7 +458,7 @@ def get_generated_tests(run_id: str) -> dict[str, Any]:
     if snapshot.is_dir():
         source_dir, stale = snapshot, False
     else:
-        source_dir, stale = resolve_out_dir("tests/generated"), True
+        source_dir, stale = resolve_generated_dir("tests/generated"), True
 
     if not source_dir.is_dir():
         return {"run_id": run_id, "count": 0, "stale": stale, "files": {}}
