@@ -96,6 +96,11 @@ class OrchestratorState:
     generated_files: list[str] = field(default_factory=list)
     replan_instruction: str | None = None
 
+    # Notified as each Decision is recorded, so a caller can narrate a run while
+    # it is still in flight. Observation only: it must never influence control
+    # flow, and a hook that raises is swallowed rather than failing the run.
+    on_decision: Callable[[Decision], None] | None = None
+
     @property
     def elapsed_s(self) -> float:
         """Elapsed time since start in seconds."""
@@ -117,11 +122,18 @@ class OrchestratorState:
         return None
 
     def record(self, decision: Decision) -> None:
-        """Record a decision and log it."""
+        """Record a decision, log it, and notify any observer."""
         self.ledger.append(decision)
         logger.info(
             f"{decision.stage.value} -> {decision.verdict}: {decision.reason}"
         )
+        if self.on_decision is not None:
+            try:
+                self.on_decision(decision)
+            except Exception:
+                # A progress observer is a convenience. It does not get to
+                # terminate a run that is otherwise healthy.
+                logger.warning("on_decision hook raised; ignoring", exc_info=True)
 
 
 # ============================================================================
@@ -892,6 +904,7 @@ def run_pipeline(
     prd_path: str | None = None,
     config: OrchestratorConfig | None = None,
     llm_config: LLMConfig | None = None,
+    on_decision: Callable[[Decision], None] | None = None,
 ) -> tuple[PipelineReport, OrchestratorState]:
     """
     Run the complete test pipeline from exploration through reporting.
@@ -904,6 +917,8 @@ def run_pipeline(
         prd_path: Optional path to product requirements document (implies SPEC_LED mode)
         config: OrchestratorConfig (uses defaults if not provided)
         llm_config: LLMConfig (loads from env if not provided)
+        on_decision: Optional observer called with each Decision as it is
+            recorded, for narrating a run in progress. Cannot affect the run.
 
     Returns:
         (PipelineReport, OrchestratorState)
@@ -923,6 +938,7 @@ def run_pipeline(
             mode=PlanMode.SWEEP,
             stage=Stage.ESCALATED,
             escalation_reason=escalation_reason,
+            on_decision=on_decision,
         )
         state.record(
             Decision.now(
@@ -970,6 +986,7 @@ def run_pipeline(
                 mode=PlanMode.SWEEP,
                 stage=Stage.ESCALATED,
                 escalation_reason=f"Failed to load LLM config: {e}",
+                on_decision=on_decision,
             )
             state.record(
                 Decision.now(
@@ -1016,6 +1033,7 @@ def run_pipeline(
         # accepted and then quietly ignored.
         max_cost_usd=config.max_cost_usd,
         max_pipeline_seconds=config.max_pipeline_seconds,
+        on_decision=on_decision,
     )
 
     # Main loop

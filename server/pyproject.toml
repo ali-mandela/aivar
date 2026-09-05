@@ -9,6 +9,8 @@ dependencies = [
     "pydantic-settings>=2.11.0",
     "playwright>=1.62.0",
     "psycopg[binary]>=3.3.5",
+    # Required by FastAPI to parse multipart form data (the PRD upload).
+    "python-multipart>=0.0.9",
 ]
 
 [build-system]
