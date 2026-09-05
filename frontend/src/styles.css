@@ -664,6 +664,81 @@ table.pages tr:last-child td {
   border-bottom: 0;
 }
 
+/* Planned flows. Each opens to the journey it will actually perform. */
+.flows {
+  margin-top: 8px;
+}
+
+details.flow {
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+details.flow + details.flow {
+  margin-top: 6px;
+}
+
+details.flow > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+details.flow[open] > summary {
+  border-bottom: 1px solid var(--rule);
+}
+
+.flow-name {
+  font-weight: 500;
+}
+
+.flow-counts {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.flow-desc {
+  margin: 10px 12px 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 74ch;
+}
+
+/* Flow kind is a category, not a severity, so it reads in neutral ink --
+   except happy_path, which is the one a plan must not consist only of. */
+.sev.kind-happy_path {
+  background: var(--go-wash);
+  color: var(--go);
+}
+.sev.kind-negative,
+.sev.kind-error_state,
+.sev.kind-edge_case,
+.sev.kind-navigation {
+  background: var(--ground);
+  color: var(--muted);
+}
+
+ol.steps {
+  margin: 8px 0 12px;
+  padding-left: 34px;
+  font: 400 12.5px/1.75 var(--mono);
+}
+
+ol.steps li {
+  color: var(--muted);
+}
+
+/* An assertion is what makes a step a test rather than a script. */
+ol.steps li.is-assert {
+  color: var(--ink);
+}
+
 pre.evidence,
 pre.code {
   margin: 8px 0 0;

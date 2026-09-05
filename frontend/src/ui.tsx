@@ -122,13 +122,77 @@ function pathOf(url: string): string {
   }
 }
 
+/** One planned step. Selectors are absent at plan time by design. */
+interface PlannedStep {
+  kind: string;
+  verb: string;
+  target: string;
+  value: string | null;
+}
+
+/** One planned flow, as the plan stage records it. */
+interface PlannedFlow {
+  name: string;
+  kind: string;
+  description: string;
+  steps: PlannedStep[];
+}
+
+function isPlannedFlows(v: unknown): v is PlannedFlow[] {
+  return (
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.every(
+      (f) => f && typeof f === "object" && typeof (f as PlannedFlow).name === "string",
+    )
+  );
+}
+
+/** A step as a single readable line: the verb, what it acts on, and the value
+ *  it uses. Mirrors how the generated pytest reads. */
+function stepLine(s: PlannedStep): string {
+  const base = `${s.verb} ${s.target}`.trim();
+  return s.value ? `${base} = ${s.value}` : base;
+}
+
+function FlowTable({ flows }: { flows: PlannedFlow[] }) {
+  return (
+    <div className="flows">
+      {flows.map((f, i) => {
+        const assertions = f.steps.filter((s) => s.kind === "assertion").length;
+        return (
+          <details className="flow" key={`${f.name}-${i}`}>
+            <summary>
+              <span className="flow-name">{f.name}</span>
+              <span className={`sev kind-${f.kind}`}>{f.kind}</span>
+              <span className="flow-counts">
+                {f.steps.length} steps, {assertions} asserted
+              </span>
+            </summary>
+            {f.description && <p className="flow-desc">{f.description}</p>}
+            <ol className="steps">
+              {f.steps.map((s, j) => (
+                <li key={j} className={s.kind === "assertion" ? "is-assert" : ""}>
+                  {stepLine(s)}
+                </li>
+              ))}
+            </ol>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Evidence, rendered for reading where its shape is known and as JSON
- *  otherwise. A count on its own ("discovered 5 pages") cannot be checked; the
- *  point of the ledger is that a human can verify the claim. */
+ *  otherwise. A count on its own ("discovered 5 pages", "planned 4 flows")
+ *  cannot be checked; the point of the ledger is that a human can verify the
+ *  claim, which needs the things themselves. */
 function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
   const pages = evidence.pages;
+  const flows = evidence.flows;
   const rest = Object.fromEntries(
-    Object.entries(evidence).filter(([k]) => k !== "pages"),
+    Object.entries(evidence).filter(([k]) => k !== "pages" && k !== "flows"),
   );
 
   return (
@@ -158,6 +222,7 @@ function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
           </tbody>
         </table>
       )}
+      {isPlannedFlows(flows) && <FlowTable flows={flows} />}
       {Object.keys(rest).length > 0 && (
         <pre className="evidence">{JSON.stringify(rest, null, 2)}</pre>
       )}

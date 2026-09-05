@@ -41,7 +41,7 @@ from app.paths import resolve_out_dir
 from app.planner import plan_flows
 from app.report import PipelineReport, render_pipeline_text, write_pipeline_report
 from app.resolve import best
-from app.secrets import resolve_value
+from app.secrets import redact, resolve_value
 from app.target import Target
 from app.triage import triage_run
 
@@ -240,6 +240,32 @@ def _step_plan(
             {
                 "flow_count": plan.flow_count,
                 "kinds": [k.value for k in plan.kinds_covered],
+                # The journeys themselves, not just how many there were. A
+                # count and a set of kinds cannot be checked against the app;
+                # named flows and their steps can. Selectors are deliberately
+                # absent -- nothing is compiled yet at this stage, so there is
+                # nothing truthful to report about them.
+                "flows": [
+                    {
+                        "name": f.name,
+                        "kind": f.kind.value,
+                        "description": f.description,
+                        "steps": [
+                            {
+                                "kind": s.kind.value,
+                                "verb": s.verb,
+                                "target": s.target,
+                                # Credentials travel as ${NAME} placeholders and
+                                # are resolved far later than this, but evidence
+                                # is persisted and rendered in a browser, so it
+                                # goes through redact rather than trusting that.
+                                "value": redact(s.value) if s.value else None,
+                            }
+                            for s in f.steps
+                        ],
+                    }
+                    for f in plan.flows
+                ],
             },
         )
     except Exception as e:
