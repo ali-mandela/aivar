@@ -28,7 +28,7 @@ export default function RunTab({
   result: RunResult | null;
   onResult: (r: RunResult) => void;
 }) {
-  const [url, setUrl] = useState("https://www.saucedemo.com");
+  const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [intent, setIntent] = useState("");
