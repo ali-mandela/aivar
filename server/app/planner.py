@@ -31,6 +31,68 @@ VALID_VERBS: tuple[str, ...] = (
     "assert_hidden",
 )
 
+# Names a model reaches for that mean one of ours.
+#
+# "assert_visible" for "wait_visible" is the obvious one, and rejecting it
+# escalated whole runs -- the retry asked again and got the same sensible
+# synonym back, so a plan that was correct in every respect that matters was
+# thrown away over one word. The set of verbs is ours to name; insisting the
+# model guess our spelling is a test of vocabulary, not of planning.
+VERB_ALIASES: dict[str, str] = {
+    # visibility
+    "assert_visible": "wait_visible",
+    "expect_visible": "wait_visible",
+    "is_visible": "wait_visible",
+    "visible": "wait_visible",
+    "see": "wait_visible",
+    "wait_for": "wait_visible",
+    # absence
+    "assert_not_visible": "assert_hidden",
+    "assert_invisible": "assert_hidden",
+    "expect_hidden": "assert_hidden",
+    "not_visible": "assert_hidden",
+    # text
+    "assert_contains_text": "assert_text",
+    "assert_text_contains": "assert_text",
+    "expect_text": "assert_text",
+    "contains_text": "assert_text",
+    "has_text": "assert_text",
+    # address
+    "assert_path": "assert_url",
+    "expect_url": "assert_url",
+    "assert_navigation": "assert_url",
+    "url": "assert_url",
+    # actions
+    "type": "fill",
+    "input": "fill",
+    "enter": "fill",
+    "set": "fill",
+    "select_option": "select",
+    "choose": "select",
+    "tick": "check",
+    "checkbox": "check",
+    "keypress": "press",
+    "key": "press",
+    "press_key": "press",
+    "tap": "click",
+    "submit": "click",
+}
+
+
+def normalize_verb(verb: object) -> object:
+    """Map a synonym onto the verb it plainly means, leaving anything else alone.
+
+    Returned unchanged when it is not a string or not a known alias, so the
+    validator still rejects a verb that really has no equivalent rather than
+    guessing at one.
+    """
+    if not isinstance(verb, str):
+        return verb
+    lowered = verb.strip().lower()
+    if lowered in VALID_VERBS:
+        return lowered
+    return VERB_ALIASES.get(lowered, verb)
+
 
 PLAN_SYSTEM = """You are a test automation expert. Your task is to generate a test plan as a JSON object with the following structure:
 
@@ -93,7 +155,7 @@ def validate_plan(raw: dict) -> list[PlannedStep]:
             )
 
         # Validate verb
-        verb = step_dict.get("verb")
+        verb = normalize_verb(step_dict.get("verb"))
         if verb not in VALID_VERBS:
             raise PlanValidationError(
                 f"Step {i}: verb must be one of {', '.join(VALID_VERBS)}, got '{verb}'"
@@ -259,121 +321,141 @@ def _validate_and_build_flows(
         raise PlanValidationError("flows list must not be empty")
 
     flows = []
+    # Why each dropped flow was dropped, so a plan that lost one says so.
+    rejected: list[str] = []
     flow_kinds = set()
 
     for flow_idx, flow_dict in enumerate(flows_data):
-        if flow_idx >= max_flows:
-            break
-
-        # Validate name
-        name = flow_dict.get("name")
-        if not isinstance(name, str) or not name:
-            raise PlanValidationError(f"Flow {flow_idx}: name must be a non-empty string")
-
-        # Validate kind
-        kind_str = flow_dict.get("kind")
+        # One malformed flow should not discard the ones beside it.
+        #
+        # A single unrecognised verb in flow 2 used to raise straight out
+        # of here, escalating the run and throwing away three flows that
+        # were completely fine. The model writes four independent flows;
+        # they should fail independently too.
         try:
-            kind = FlowKind(kind_str)
-        except (ValueError, TypeError):
-            raise PlanValidationError(
-                f"Flow {flow_idx}: kind must be one of {[k.value for k in FlowKind]}, got '{kind_str}'"
-            )
-        flow_kinds.add(kind)
+            if flow_idx >= max_flows:
+                break
 
-        # Get description
-        description = flow_dict.get("description", "")
+            # Validate name
+            name = flow_dict.get("name")
+            if not isinstance(name, str) or not name:
+                raise PlanValidationError(f"Flow {flow_idx}: name must be a non-empty string")
 
-        # Validate and build steps
-        steps_data = flow_dict.get("steps", [])
-        if not isinstance(steps_data, list) or len(steps_data) == 0:
-            raise PlanValidationError(f"Flow {flow_idx}: steps must be a non-empty list")
-
-        steps = []
-        assertion_count = 0
-
-        for step_idx, step_dict in enumerate(steps_data):
             # Validate kind
-            step_kind_str = step_dict.get("kind")
-            if step_kind_str not in ("action", "assertion"):
+            kind_str = flow_dict.get("kind")
+            try:
+                kind = FlowKind(kind_str)
+            except (ValueError, TypeError):
                 raise PlanValidationError(
-                    f"Flow {flow_idx}, step {step_idx}: kind must be 'action' or 'assertion', got '{step_kind_str}'"
+                    f"Flow {flow_idx}: kind must be one of {[k.value for k in FlowKind]}, got '{kind_str}'"
+                )
+            flow_kinds.add(kind)
+
+            # Get description
+            description = flow_dict.get("description", "")
+
+            # Validate and build steps
+            steps_data = flow_dict.get("steps", [])
+            if not isinstance(steps_data, list) or len(steps_data) == 0:
+                raise PlanValidationError(f"Flow {flow_idx}: steps must be a non-empty list")
+
+            steps = []
+            assertion_count = 0
+
+            for step_idx, step_dict in enumerate(steps_data):
+                # Validate kind
+                step_kind_str = step_dict.get("kind")
+                if step_kind_str not in ("action", "assertion"):
+                    raise PlanValidationError(
+                        f"Flow {flow_idx}, step {step_idx}: kind must be 'action' or 'assertion', got '{step_kind_str}'"
+                    )
+
+                # Validate verb
+                verb = normalize_verb(step_dict.get("verb"))
+                if verb not in VALID_VERBS:
+                    raise PlanValidationError(
+                        f"Flow {flow_idx}, step {step_idx}: verb must be one of "
+                        f"{', '.join(VALID_VERBS)}, got '{verb}'"
+                    )
+
+                # Validate target
+                target = step_dict.get("target", "").strip()
+                if not target:
+                    raise PlanValidationError(
+                        f"Flow {flow_idx}, step {step_idx}: target must be a non-empty string"
+                    )
+
+                # Get value
+                value = step_dict.get("value")
+
+                # Normalise assertions.
+                #
+                # This used to force every assertion to wait_visible and drop its
+                # value, so a model answering with assert_url "/dashboard" had that
+                # rewritten to "is anything visible" before anyone saw it -- the
+                # plan looked like the model's own timidity when it was ours.
+                # Now only a verb that is not an assertion verb gets corrected.
+                if step_kind_str == "assertion":
+                    if verb not in ASSERTION_VERBS:
+                        verb = "wait_visible"
+                        value = None
+                    elif verb not in VALUE_ASSERTION_VERBS:
+                        # wait_visible and assert_hidden locate an element and
+                        # nothing more; a value on them means nothing.
+                        value = None
+                    assertion_count += 1
+
+                step_kind = StepKind(step_kind_str)
+                step_id = f"f{flow_idx + 1}s{step_idx + 1}"
+                steps.append(
+                    Step(
+                        id=step_id,
+                        kind=step_kind,
+                        verb=verb,
+                        target=target,
+                        value=value,
+                    )
                 )
 
-            # Validate verb
-            verb = step_dict.get("verb")
-            if verb not in VALID_VERBS:
+            # Reject flows with no assertions
+            if assertion_count == 0:
                 raise PlanValidationError(
-                    f"Flow {flow_idx}, step {step_idx}: verb must be one of "
-                    f"{', '.join(VALID_VERBS)}, got '{verb}'"
+                    f"Flow {flow_idx}: flow has no assertions "
+                    "(a test that asserts nothing always passes and hides real regressions)"
                 )
 
-            # Validate target
-            target = step_dict.get("target", "").strip()
-            if not target:
-                raise PlanValidationError(
-                    f"Flow {flow_idx}, step {step_idx}: target must be a non-empty string"
-                )
+            # Build flow object
+            flow_id = f"f{flow_idx + 1}"
 
-            # Get value
-            value = step_dict.get("value")
+            # Where this flow should start. Without it every flow opens at the entry
+            # URL and has to click its way to the screen under test, which is both
+            # longer and more fragile -- and it is what stops flows from being run
+            # independently of one another.
+            entry_url = flow_dict.get("entry_url")
+            if not isinstance(entry_url, str) or not entry_url.startswith(("http://", "https://")):
+                entry_url = None
 
-            # Normalise assertions.
-            #
-            # This used to force every assertion to wait_visible and drop its
-            # value, so a model answering with assert_url "/dashboard" had that
-            # rewritten to "is anything visible" before anyone saw it -- the
-            # plan looked like the model's own timidity when it was ours.
-            # Now only a verb that is not an assertion verb gets corrected.
-            if step_kind_str == "assertion":
-                if verb not in ASSERTION_VERBS:
-                    verb = "wait_visible"
-                    value = None
-                elif verb not in VALUE_ASSERTION_VERBS:
-                    # wait_visible and assert_hidden locate an element and
-                    # nothing more; a value on them means nothing.
-                    value = None
-                assertion_count += 1
-
-            step_kind = StepKind(step_kind_str)
-            step_id = f"f{flow_idx + 1}s{step_idx + 1}"
-            steps.append(
-                Step(
-                    id=step_id,
-                    kind=step_kind,
-                    verb=verb,
-                    target=target,
-                    value=value,
+            flows.append(
+                Flow(
+                    id=flow_id,
+                    name=name,
+                    description=description,
+                    kind=kind,
+                    steps=steps,
+                    entry_url=entry_url,
                 )
             )
+        except PlanValidationError as flow_error:
+            rejected.append(f"flow {flow_idx}: {flow_error}")
+            logger.info("plan: dropping flow %d - %s", flow_idx, flow_error)
+            continue
 
-        # Reject flows with no assertions
-        if assertion_count == 0:
-            raise PlanValidationError(
-                f"Flow {flow_idx}: flow has no assertions "
-                "(a test that asserts nothing always passes and hides real regressions)"
-            )
-
-        # Build flow object
-        flow_id = f"f{flow_idx + 1}"
-
-        # Where this flow should start. Without it every flow opens at the entry
-        # URL and has to click its way to the screen under test, which is both
-        # longer and more fragile -- and it is what stops flows from being run
-        # independently of one another.
-        entry_url = flow_dict.get("entry_url")
-        if not isinstance(entry_url, str) or not entry_url.startswith(("http://", "https://")):
-            entry_url = None
-
-        flows.append(
-            Flow(
-                id=flow_id,
-                name=name,
-                description=description,
-                kind=kind,
-                steps=steps,
-                entry_url=entry_url,
-            )
+    if not flows:
+        raise PlanValidationError(
+            "no flow in the plan was usable: " + "; ".join(rejected)
         )
+    if rejected:
+        logger.info("plan: kept %d flow(s), dropped %d", len(flows), len(rejected))
 
     # Check if only happy paths
     is_happy_path_only = flow_kinds <= {FlowKind.HAPPY_PATH, FlowKind.NAVIGATION}
