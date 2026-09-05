@@ -404,13 +404,7 @@ def _call_openai_style(
     endpoint: Endpoint, model: str, system: str, user: str, config: LLMConfig
 ) -> tuple[str, int, int, float]:
     """OpenRouter and Sarvam: the OpenAI chat-completions dialect."""
-    data = _post_json(
-        f"{endpoint.base_url}/chat/completions",
-        {
-            "Authorization": f"Bearer {endpoint.api_key}",
-            "Content-Type": "application/json",
-        },
-        {
+    body = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
@@ -419,7 +413,16 @@ def _call_openai_style(
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
             "response_format": {"type": "json_object"},
+        }
+    if endpoint.provider is Provider.SARVAM:
+        body["reasoning_effort"] = None
+    data = _post_json(
+        f"{endpoint.base_url}/chat/completions",
+        {
+            "Authorization": f"Bearer {endpoint.api_key}",
+            "Content-Type": "application/json",
         },
+        body,
         config.timeout_s,
     )
 
