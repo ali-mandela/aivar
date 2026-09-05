@@ -8,6 +8,7 @@ the OrchestratorState and produces a Decision (stage + verdict + reason + next s
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field, replace
@@ -368,17 +369,21 @@ def _step_generate(
             Stage.ESCALATED,
         )
 
-    # Build credentials dict from orchestrator state
-    credentials = {}
-    if state.username:
-        credentials["username"] = state.username
-    else:
-        credentials["username"] = DEFAULT_CREDENTIALS.get("username", "${AIVAR_USERNAME}")
-
-    if state.password:
-        credentials["password"] = state.password
-    else:
-        credentials["password"] = DEFAULT_CREDENTIALS.get("password", "${AIVAR_PASSWORD}")
+    # Always compile with placeholders, never with the credentials themselves.
+    #
+    # Supplying a username and password used to put them into the step values
+    # literally, and codegen writes a literal straight into the file -- so the
+    # deliverable, the thing a user is told to commit to their repository,
+    # contained `fill('secret_sauce')`. The placeholder path already existed and
+    # was taken only when no credentials were given, which is exactly backwards:
+    # it was used when there was no secret to protect and skipped when there was.
+    #
+    # The credentials the user typed still reach the browser: run_pipeline puts
+    # them in the environment for the duration of the run, and resolve_value
+    # reads them there. Nothing about the agent's own run needs anyone to export
+    # anything; the environment variables matter only when a person later runs
+    # the generated suite themselves, which is where a secret belongs.
+    credentials = dict(DEFAULT_CREDENTIALS)
 
     compiled = []
     playwright = None
@@ -1343,6 +1348,43 @@ def run_pipeline(
         on_decision=on_decision,
     )
 
+    # Put the supplied credentials where resolve_value will find them.
+    #
+    # Steps carry ${AIVAR_USERNAME} rather than the credential itself, so that
+    # the generated files can be committed without leaking anything. The values
+    # still have to reach the browser during this run, and the environment is
+    # where the placeholder mechanism already looks -- so a user who types
+    # credentials into the form never has to export anything to get a run.
+    #
+    # Restored afterwards. Two runs with different credentials at the same time
+    # would still overwrite each other; that is a real limit of a process-wide
+    # environment, and worth replacing with a per-run secret mapping before this
+    # serves more than one user at a time.
+    _prior_env = {
+        key: os.environ.get(key)
+        for key in ("AIVAR_USERNAME", "AIVAR_PASSWORD")
+    }
+    if username:
+        os.environ["AIVAR_USERNAME"] = username
+    if password:
+        os.environ["AIVAR_PASSWORD"] = password
+
+    try:
+        return _drive(state, config, llm_config)
+    finally:
+        for key, prior in _prior_env.items():
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
+
+
+def _drive(
+    state: OrchestratorState,
+    config: OrchestratorConfig,
+    llm_config: LLMConfig,
+) -> tuple[PipelineReport, OrchestratorState]:
+    """Run the stage machine to a terminal stage and build the report."""
     # Main loop
     while state.stage not in TERMINAL_STAGES:
         # Check budget
