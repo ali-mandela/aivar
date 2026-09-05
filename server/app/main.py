@@ -1,19 +1,62 @@
+"""Autonomous Test Orchestration Agent -- HTTP entrypoint.
+
+Give it a URL and it explores the application, plans meaningful test flows,
+critiques its own coverage, generates runnable pytest files, executes them,
+heals broken locators, and reports what it did and what it could not reach --
+with no human intervention between stages.
+"""
+
+import logging
+
 from fastapi import FastAPI
 
+from app.api import router
 from app.config import get_settings
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 settings = get_settings()
 
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+app = FastAPI(
+    title=settings.app_name,
+    description=__doc__,
+    version="0.1.0",
+    debug=settings.debug,
+)
+
+app.include_router(router)
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {
+@app.get("/health", summary="Liveness plus the two external dependencies")
+def health() -> dict:
+    """Reports whether the model provider and the database are reachable.
+
+    Neither is fatal: a missing database costs run history, not runs. Knowing
+    which one is down before starting a 60-second pipeline is worth the check.
+    """
+    out: dict = {
         "status": "ok",
         "app": settings.app_name,
         "environment": settings.environment,
     }
+
+    try:
+        from app.llm import LLMConfig
+
+        cfg = LLMConfig.from_env()
+        out["llm"] = {"configured": True, "models": list(cfg.models)}
+    except Exception as e:
+        out["llm"] = {"configured": False, "reason": f"{type(e).__name__}: {e}"}
+
+    try:
+        from app.store import health as store_health
+
+        connected, detail = store_health()
+        out["database"] = {"connected": connected, "detail": detail}
+    except Exception as e:
+        out["database"] = {"connected": False, "detail": f"{type(e).__name__}: {e}"}
+
+    return out
 
 
 if __name__ == "__main__":
