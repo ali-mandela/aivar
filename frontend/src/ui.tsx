@@ -85,18 +85,83 @@ export function DecisionLedger({
               <span className="dec-next">next: {d.next_stage}</span>
             </div>
             <p className="dec-reason">{d.reason}</p>
-            {hasEvidence && (
-              <details>
-                <summary>Evidence</summary>
-                <pre className="evidence">
-                  {JSON.stringify(d.evidence, null, 2)}
-                </pre>
-              </details>
-            )}
+            {hasEvidence && <Evidence evidence={d.evidence} />}
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/** One discovered page, as the explore stage records it. */
+interface ExploredPage {
+  url: string;
+  title: string;
+  depth: number;
+  forms: number;
+}
+
+function isExploredPages(v: unknown): v is ExploredPage[] {
+  return (
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.every(
+      (p) => p && typeof p === "object" && typeof (p as ExploredPage).url === "string",
+    )
+  );
+}
+
+/** The path an URL points at, which is what identifies a page within an app.
+ *  Falls back to the raw string if it will not parse. */
+function pathOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.pathname}${u.search}` || "/";
+  } catch {
+    return url;
+  }
+}
+
+/** Evidence, rendered for reading where its shape is known and as JSON
+ *  otherwise. A count on its own ("discovered 5 pages") cannot be checked; the
+ *  point of the ledger is that a human can verify the claim. */
+function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
+  const pages = evidence.pages;
+  const rest = Object.fromEntries(
+    Object.entries(evidence).filter(([k]) => k !== "pages"),
+  );
+
+  return (
+    <details>
+      <summary>Evidence</summary>
+      {isExploredPages(pages) && (
+        <table className="pages">
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Title</th>
+              <th className="num">Depth</th>
+              <th className="num">Forms</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pages.map((p, i) => (
+              <tr key={`${p.url}-${i}`}>
+                <td className="num">
+                  <span title={p.url}>{pathOf(p.url)}</span>
+                </td>
+                <td>{p.title || "—"}</td>
+                <td className="num">{p.depth}</td>
+                <td className="num">{p.forms || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {Object.keys(rest).length > 0 && (
+        <pre className="evidence">{JSON.stringify(rest, null, 2)}</pre>
+      )}
+    </details>
   );
 }
 

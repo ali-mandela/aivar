@@ -643,6 +643,27 @@ summary:focus-visible,
   color: var(--ink);
 }
 
+/* Sits inside a ledger row, so it steps back from the page-level tables. */
+table.pages {
+  margin-top: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+table.pages th {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--ground);
+}
+
+table.pages td {
+  padding: 6px 12px;
+}
+
+table.pages tr:last-child td {
+  border-bottom: 0;
+}
+
 pre.evidence,
 pre.code {
   margin: 8px 0 0;

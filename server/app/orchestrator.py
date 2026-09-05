@@ -178,6 +178,21 @@ def _step_explore(
                 "page_count": state.exploration.page_count,
                 "authenticated": state.exploration.authenticated,
                 "consent_dismissed": state.exploration.consent_dismissed,
+                "entry_url": state.exploration.entry_url,
+                # Naming the pages, not just counting them: "discovered 5 pages"
+                # is unauditable on its own, and the ledger's job is to let a
+                # human check the claim rather than trust it. Bounded by
+                # max_explore_pages, and this rides into Postgres with the rest
+                # of the evidence, so run history keeps it too.
+                "pages": [
+                    {
+                        "url": p.url,
+                        "title": p.title,
+                        "depth": p.depth,
+                        "forms": len(p.forms),
+                    }
+                    for p in state.exploration.pages
+                ],
             },
         )
     except Exception as e:
