@@ -41,7 +41,8 @@ from app.models.models import CompiledTest, RunResult, Severity, StepKind
 from app.paths import resolve_out_dir
 from app.planner import plan_flows
 from app.report import PipelineReport, render_pipeline_text, write_pipeline_report
-from app.resolve import best
+from app.healer import rerank
+from app.resolve import best, shortlist
 from app.secrets import redact, resolve_value
 from app.target import Target
 from app.triage import triage_run
@@ -385,6 +386,12 @@ def _step_generate(
     page = None
     browser_wrapper = None
 
+    # How many targets in this run may be located by asking the model, shared
+    # across every flow. Two per planned flow is enough for the handful the text
+    # match cannot decide, without letting a run of unresolvable targets turn
+    # into an unbounded spend.
+    resolve_budget = {"left": 2 * len(state.plan.flows)}
+
     try:
         # Launch browser once for all flows
         try:
@@ -425,7 +432,12 @@ def _step_generate(
                     continue
 
                 compiled_flow = _compile_flow(
-                    flow, state.url, browser_wrapper, llm, credentials=credentials
+                    flow,
+                    state.url,
+                    browser_wrapper,
+                    llm,
+                    credentials=credentials,
+                    resolve_budget=resolve_budget,
                 )
                 compiled.append(compiled_flow)
 
@@ -562,7 +574,13 @@ def _prune_unresolved_assertions(flow: Flow, state: OrchestratorState) -> Flow:
 
 
 def _compile_flow(
-    flow: Flow, url: str, browser: Browser, llm: LLMConfig, *, credentials: dict[str, str] | None = None
+    flow: Flow,
+    url: str,
+    browser: Browser,
+    llm: LLMConfig,
+    *,
+    credentials: dict[str, str] | None = None,
+    resolve_budget: dict[str, int] | None = None,
 ) -> Flow:
     """
     Compile a single flow by dry-running it against the live app.
@@ -578,6 +596,10 @@ def _compile_flow(
         llm: LLM config (unused but kept for signature compatibility)
         credentials: Dict of credential placeholders (e.g., {"username": "${AIVAR_USERNAME}"})
                     Falls back to DEFAULT_CREDENTIALS if not provided.
+        resolve_budget: Shared {"left": n} counter capping how many targets in a
+                    run may be located by asking the model. Shared across flows
+                    so one pathological flow cannot spend the whole allowance.
+                    None disables model-assisted resolution entirely.
     """
     from dataclasses import replace as dataclass_replace
 
@@ -627,6 +649,44 @@ def _compile_flow(
             # resolve.best() returns a Candidate (or None); the Selector hangs off it.
             candidate = best(nodes, step.target) if step.target and nodes else None
             selector = candidate.selector if candidate else None
+
+            # Ask the model when the text match cannot decide.
+            #
+            # Plans name targets by meaning -- "error message", "confirmation
+            # banner" -- while the heuristic matches on words. An app whose
+            # error reads "Epic sadface: Username and password do not match"
+            # shares no word with "error message", so the step failed to resolve
+            # and its flow was cut short, though the element was plainly on the
+            # page and a person would have picked it instantly.
+            #
+            # This is first-time location, not repair. Healing an assertion is
+            # forbidden because a failing check is a candidate bug; building the
+            # check in the first place is just reading the page, and applies to
+            # actions and assertions alike.
+            if selector is None and step.target and nodes and llm is not None:
+                if resolve_budget is not None and resolve_budget.get("left", 0) > 0:
+                    try:
+                        options = shortlist(nodes, step.target, limit=8)
+                        if options:
+                            resolve_budget["left"] -= 1
+                            result, _ = rerank(step.target, options, llm)
+                            if (
+                                0 <= result.index < len(options)
+                                and result.confidence >= DEFAULTS.min_heal_confidence
+                            ):
+                                selector = options[result.index].selector
+                                logger.info(
+                                    "compile %s/%s: model located %r (confidence %.2f) - %s",
+                                    flow.id, step.id, step.target,
+                                    result.confidence, result.reasoning,
+                                )
+                    except Exception as e:
+                        # A model that will not answer costs one unresolved
+                        # step, never the run.
+                        logger.info(
+                            "compile %s/%s: model could not locate %r: %s",
+                            flow.id, step.id, step.target, e,
+                        )
 
             if selector is None:
                 logger.info(

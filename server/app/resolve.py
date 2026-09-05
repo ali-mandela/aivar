@@ -20,6 +20,28 @@ GENERIC_WORDS = {
     "text",
     "link",
     "icon",
+    # Role and container nouns a plan uses to say what kind of thing it means.
+    # "box" was stripped but "textbox" was not, so "Username textbox" scored 0.5
+    # against a node named "Username" -- under the 0.6 threshold, and the login
+    # step of every flow failed to resolve on an app whose field is plainly
+    # there. These are all words that describe the widget, never which one.
+    "textbox",
+    "combobox",
+    "checkbox",
+    "dropdown",
+    "select",
+    "menu",
+    "container",
+    "element",
+    "form",
+    "heading",
+    "message",
+    "banner",
+    "section",
+    "area",
+    "panel",
+    "dialog",
+    "modal",
 }
 
 # Minimum heuristic score to accept a match
