@@ -31,6 +31,7 @@ from app.contracts.contracts import (
     TERMINAL_STAGES,
     TestPlan,
     TriageResult,
+    TriageVerdict,
 )
 from app.critic import assess_coverage, escalate_if_exhausted, structural_gaps
 from app.executor import run_test
@@ -457,6 +458,23 @@ def _step_generate(
                 "fully_compiled": len(fully),
                 "partial": len(partial),
                 "planned": len(state.plan.flows),
+                # Which flows are partial, and precisely which steps could not
+                # be located. "3 partial" gives nothing to act on; a named step
+                # that failed to resolve points straight at either a selector
+                # problem or a part of the app the explorer never reached.
+                "compiled": [
+                    {
+                        "name": f.name,
+                        "compiled": f.is_compiled,
+                        "steps_total": len(f.steps),
+                        "unresolved": [
+                            {"verb": s.verb, "target": s.target}
+                            for s in f.steps
+                            if s.selector is None and s.verb != "assert_url"
+                        ],
+                    }
+                    for f in compiled
+                ],
             },
         )
 
@@ -785,6 +803,8 @@ def _step_execute(
             1 for r in state.flow_results.values() if r.status == "failed"
         )
 
+        names = {f.id: f.name for f in state.compiled_flows}
+
         return Decision.now(
             state.stage,
             "continue",
@@ -794,6 +814,32 @@ def _step_execute(
                 "total": len(state.flow_results),
                 "passed": passed,
                 "failed": failed,
+                # Which flows failed, and on which step. A pass/fail tally says
+                # a run happened; it does not say what broke.
+                "executed": [
+                    {
+                        "name": names.get(flow_id, flow_id),
+                        "status": r.status,
+                        "steps_total": len(r.results),
+                        "steps_passed": sum(
+                            1 for sr in r.results if sr.status == "passed"
+                        ),
+                        "heals_used": r.heals_used,
+                        "failures": [
+                            {
+                                "step_id": sr.step_id,
+                                "failure": sr.failure.value if sr.failure else None,
+                                # Playwright errors run to many lines; the head
+                                # of one identifies it without turning the
+                                # ledger into a log file.
+                                "error": (sr.error or "")[:240],
+                            }
+                            for sr in r.results
+                            if sr.status == "failed"
+                        ],
+                    }
+                    for flow_id, r in state.flow_results.items()
+                ],
             },
         )
 
@@ -829,13 +875,47 @@ def _step_triage(
             )
             state.triage.extend(flow_triage)
 
+        # step_id alone is not readable: name the flow and the step it belongs
+        # to, so a verdict can be checked against the journey that produced it.
+        step_index: dict[str, tuple[str, str]] = {}
+        for f in state.compiled_flows:
+            for s in f.steps:
+                step_index[s.id] = (f.name, f"{s.verb} {s.target}".strip())
+
+        counts = {v.value: 0 for v in TriageVerdict}
+        for t in state.triage:
+            counts[t.verdict.value] += 1
+
+        defects = counts[TriageVerdict.APP_DEFECT.value]
+        reason = (
+            f"Triaged {len(state.triage)} failures: "
+            f"{defects} app defects, "
+            f"{counts[TriageVerdict.SCRIPT_ISSUE.value]} script issues, "
+            f"{counts[TriageVerdict.FLAKY.value]} flaky"
+        )
+
         return Decision.now(
             state.stage,
             "continue",
-            f"Triaged {len(state.triage)} failures",
+            reason,
             Stage.REPORT,
             {
                 "triage_count": len(state.triage),
+                "verdicts": counts,
+                # The verdict is the single most consequential judgement in a
+                # run: app_defect is a candidate bug that must never be healed
+                # away. Recording the reasoning and the confidence beside it is
+                # what makes that judgement reviewable instead of asserted.
+                "triaged": [
+                    {
+                        "flow": step_index.get(t.step_id, (None, None))[0],
+                        "step": step_index.get(t.step_id, (None, t.step_id))[1],
+                        "verdict": t.verdict.value,
+                        "confidence": t.confidence,
+                        "reasoning": t.reasoning,
+                    }
+                    for t in state.triage
+                ],
             },
         )
 

@@ -138,15 +138,18 @@ interface PlannedFlow {
   steps: PlannedStep[];
 }
 
-function isPlannedFlows(v: unknown): v is PlannedFlow[] {
+/** Each stage uses its own evidence key, so a shape is never guessed at from
+ *  a name two stages share. */
+function isArrayOf<T>(v: unknown, ok: (x: Record<string, unknown>) => boolean): v is T[] {
   return (
     Array.isArray(v) &&
     v.length > 0 &&
-    v.every(
-      (f) => f && typeof f === "object" && typeof (f as PlannedFlow).name === "string",
-    )
+    v.every((x) => x !== null && typeof x === "object" && ok(x as Record<string, unknown>))
   );
 }
+
+const isPlannedFlows = (v: unknown): v is PlannedFlow[] =>
+  isArrayOf<PlannedFlow>(v, (f) => typeof f.name === "string" && Array.isArray(f.steps));
 
 /** A step as a single readable line: the verb, what it acts on, and the value
  *  it uses. Mirrors how the generated pytest reads. */
@@ -184,15 +187,160 @@ function FlowTable({ flows }: { flows: PlannedFlow[] }) {
   );
 }
 
+/* ------------------------------------------------- generate / execute -- */
+
+interface CompiledFlow {
+  name: string;
+  compiled: boolean;
+  steps_total: number;
+  unresolved: { verb: string; target: string }[];
+}
+
+interface ExecutedFlow {
+  name: string;
+  status: string;
+  steps_total: number;
+  steps_passed: number;
+  heals_used: number;
+  failures: { step_id: string; failure: string | null; error: string }[];
+}
+
+const isCompiledFlows = (v: unknown): v is CompiledFlow[] =>
+  isArrayOf<CompiledFlow>(v, (f) => typeof f.compiled === "boolean");
+
+const isExecutedFlows = (v: unknown): v is ExecutedFlow[] =>
+  isArrayOf<ExecutedFlow>(v, (f) => typeof f.status === "string" && Array.isArray(f.failures));
+
+function CompiledTable({ flows }: { flows: CompiledFlow[] }) {
+  return (
+    <div className="flows">
+      {flows.map((f, i) => (
+        <details className="flow" key={`${f.name}-${i}`} open={!f.compiled}>
+          <summary>
+            <span className="flow-name">{f.name}</span>
+            <span className={`sev ${f.compiled ? "sev-minor" : "sev-moderate"}`}>
+              {f.compiled ? "compiled" : "partial"}
+            </span>
+            <span className="flow-counts">
+              {f.unresolved.length
+                ? `${f.unresolved.length} of ${f.steps_total} unresolved`
+                : `${f.steps_total} steps`}
+            </span>
+          </summary>
+          {f.unresolved.length > 0 && (
+            <>
+              <p className="flow-desc">
+                No selector could be resolved for these steps, so the flow
+                cannot run as written.
+              </p>
+              <ol className="steps">
+                {f.unresolved.map((s, j) => (
+                  <li key={j} className="is-assert">
+                    {`${s.verb} ${s.target}`.trim()}
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function ExecutedTable({ flows }: { flows: ExecutedFlow[] }) {
+  return (
+    <div className="flows">
+      {flows.map((f, i) => {
+        const bad = f.status !== "passed";
+        return (
+          <details className="flow" key={`${f.name}-${i}`} open={bad}>
+            <summary>
+              <span className="flow-name">{f.name}</span>
+              <span className={`sev ${bad ? "sev-critical" : "kind-happy_path"}`}>
+                {f.status}
+              </span>
+              <span className="flow-counts">
+                {f.steps_passed}/{f.steps_total} steps
+                {f.heals_used > 0 && `, ${f.heals_used} healed`}
+              </span>
+            </summary>
+            {f.failures.length > 0 && (
+              <ol className="steps">
+                {f.failures.map((s, j) => (
+                  <li key={j} className="is-assert">
+                    {s.failure ? `[${s.failure}] ` : ""}
+                    {s.error || s.step_id}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- triage -- */
+
+interface Triaged {
+  flow: string | null;
+  step: string;
+  verdict: string;
+  confidence: number;
+  reasoning: string;
+}
+
+const isTriaged = (v: unknown): v is Triaged[] =>
+  isArrayOf<Triaged>(v, (t) => typeof t.verdict === "string" && typeof t.step === "string");
+
+/** app_defect is the verdict the whole project turns on: it is a candidate
+ *  bug and is never healed, so it reads as an alarm rather than a category. */
+function verdictClass(verdict: string): string {
+  if (verdict === "app_defect") return "sev-critical";
+  if (verdict === "script_issue") return "sev-moderate";
+  return "sev-minor";
+}
+
+function TriageTable({ triaged }: { triaged: Triaged[] }) {
+  return (
+    <table className="pages">
+      <thead>
+        <tr>
+          <th>Verdict</th>
+          <th>Flow</th>
+          <th>Step</th>
+          <th className="num">Confidence</th>
+          <th>Reasoning</th>
+        </tr>
+      </thead>
+      <tbody>
+        {triaged.map((t, i) => (
+          <tr key={i}>
+            <td>
+              <span className={`sev ${verdictClass(t.verdict)}`}>{t.verdict}</span>
+            </td>
+            <td>{t.flow ?? "—"}</td>
+            <td className="num">{t.step}</td>
+            <td className="num">{(t.confidence * 100).toFixed(0)}%</td>
+            <td>{t.reasoning}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 /** Evidence, rendered for reading where its shape is known and as JSON
  *  otherwise. A count on its own ("discovered 5 pages", "planned 4 flows")
  *  cannot be checked; the point of the ledger is that a human can verify the
  *  claim, which needs the things themselves. */
 function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
-  const pages = evidence.pages;
-  const flows = evidence.flows;
+  const { pages, flows, compiled, executed, triaged } = evidence;
+  const handled = new Set(["pages", "flows", "compiled", "executed", "triaged"]);
   const rest = Object.fromEntries(
-    Object.entries(evidence).filter(([k]) => k !== "pages" && k !== "flows"),
+    Object.entries(evidence).filter(([k]) => !handled.has(k)),
   );
 
   return (
@@ -223,6 +371,9 @@ function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
         </table>
       )}
       {isPlannedFlows(flows) && <FlowTable flows={flows} />}
+      {isCompiledFlows(compiled) && <CompiledTable flows={compiled} />}
+      {isExecutedFlows(executed) && <ExecutedTable flows={executed} />}
+      {isTriaged(triaged) && <TriageTable triaged={triaged} />}
       {Object.keys(rest).length > 0 && (
         <pre className="evidence">{JSON.stringify(rest, null, 2)}</pre>
       )}
