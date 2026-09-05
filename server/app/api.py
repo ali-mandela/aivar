@@ -310,7 +310,19 @@ def get_job(job_id: str) -> dict[str, Any]:
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
     if job is None:
-        raise HTTPException(404, f"Unknown job {job_id}")
+        # The registry lives in memory, so a job id that was valid a moment ago
+        # and is unknown now means this process is not the one that started it.
+        # Under --reload the usual cause is the run's own output: writing the
+        # generated suite triggers a reload unless the watcher is pointed at the
+        # source only. Saying so beats a bare "unknown job".
+        raise HTTPException(
+            404,
+            f"No running job {job_id}. Jobs are tracked in memory, so a server "
+            f"restart loses them -- under --reload, start with "
+            f"`--reload-dir app` so writing the generated tests does not "
+            f"restart the server mid-run. Finished runs are on disk and in "
+            f"GET /runs regardless.",
+        )
     out = dict(job, job_id=job_id)
     if job.get("run_id"):
         out["run"] = f"/runs/{job['run_id']}"

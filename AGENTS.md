@@ -174,14 +174,21 @@ Managed entirely with **uv**. No `pip`, no `requirements.txt`.
 cd server
 uv sync                                    # install
 uv run playwright install chromium         # browser binary, first time only
-uv run uvicorn app.main:app --reload       # serve
+uv run uvicorn app.main:app --reload --reload-dir app    # serve
 uv run pytest tests/generated              # run a generated suite
 ```
+
+`--reload-dir app` is not optional. A run writes pytest files into
+`tests/generated` and reports into `artifacts/`, both inside the server
+directory, so watching the whole tree means the pipeline restarts the server by
+producing its own output -- killing the background thread mid-run and emptying
+the in-memory job registry, which surfaces to the client as a 404 on
+`GET /jobs/{id}`. The pipeline destroys itself by succeeding.
 
 Trigger a run:
 
 ```bash
-curl -X POST localhost:8000/runs \
+curl -X POST localhost:\\\\\00/runs \
   -H 'content-type: application/json' \
   -d '{"url":"https://example.com","username":"u","password":"p"}'
 ```
