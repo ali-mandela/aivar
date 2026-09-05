@@ -1,0 +1,885 @@
+/* Aivar control panel.
+   Visual model: a diagnostic instrument printout on plotter paper, not a
+   dashboard of cards. Structure comes from hairline rules and a trace rail;
+   color is reserved for verdict and severity, where it carries meaning. */
+
+:root {
+  --ground: #f4f5f1;
+  --panel: #ffffff;
+  --ink: #16211f;
+  --muted: #6a736c;
+  --rule: #d9ddd4;
+  --rule-strong: #b9c0b3;
+
+  /* Signals. Used only where the colour states something. */
+  --go: #1f7a4c;
+  --hold: #b0761a;
+  --stop: #b3352c;
+  --link: #1b4fd8;
+
+  --go-wash: #eaf4ee;
+  --hold-wash: #faf1e0;
+  --stop-wash: #fbeceb;
+
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --sidebar: 264px;
+  --gutter: 32px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 15px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Machine output reads in mono; prose reads in sans. */
+.mono {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  letter-spacing: -0.01em;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 550;
+  letter-spacing: -0.017em;
+}
+
+a {
+  color: var(--link);
+}
+
+/* ---------------------------------------------------------------- shell -- */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  min-height: 100%;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 26px 22px;
+  border-right: 1px solid var(--rule);
+}
+
+.wordmark {
+  font: 600 19px/1 var(--sans);
+  letter-spacing: -0.03em;
+}
+
+.wordmark span {
+  display: block;
+  margin-top: 7px;
+  font: 400 12.5px/1.45 var(--sans);
+  color: var(--muted);
+  letter-spacing: 0;
+  max-width: 20ch;
+}
+
+.side-section {
+  margin-top: 30px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.side-section h2 {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--muted);
+  margin-bottom: 11px;
+}
+
+.status-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+/* A filled square reads as an instrument lamp; a circle reads as decoration. */
+.lamp {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  transform: translateY(-1px);
+  background: var(--muted);
+}
+.lamp.ok {
+  background: var(--go);
+}
+.lamp.bad {
+  background: var(--stop);
+}
+
+.status-detail {
+  margin: 7px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.model-list {
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-list li {
+  padding: 3px 0;
+  border-top: 1px dotted var(--rule);
+  color: var(--ink);
+}
+
+.model-list li:first-child {
+  border-top: 0;
+}
+
+.model-list .fallback {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ main -- */
+
+.main {
+  background: var(--panel);
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--gutter);
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: 450 14px/1 var(--sans);
+  color: var(--muted);
+  padding: 17px 14px 15px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.tab .count {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-left: 6px;
+}
+
+.page {
+  padding: 26px var(--gutter) 72px;
+  max-width: 1080px;
+}
+
+.page > section + section {
+  margin-top: 34px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 9px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.section-head h2 {
+  font-size: 15px;
+}
+
+.section-head .aside {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ form -- */
+
+/* Inputs are set to a comfortable reading measure rather than the full page
+   width. Tables, the ledger and the report still use the whole column. */
+.page form {
+  max-width: 660px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field > label {
+  display: block;
+  font-size: 13px;
+  font-weight: 450;
+  margin-bottom: 5px;
+}
+
+.field .hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+/* Sits under the username/password pair, which is a .row rather than a
+   .field, so it needs its own spacing. */
+.credentials-note {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: -4px 0 20px;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="password"],
+textarea {
+  width: 100%;
+  font: 400 14px/1.5 var(--sans);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  padding: 9px 11px;
+}
+
+input[type="url"],
+input[type="text"]#username {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 76px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+  font-size: 13.5px;
+}
+
+.check input {
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--ink);
+}
+
+.check .hint {
+  margin: 2px 0 0;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--ink);
+}
+
+.slider-row output {
+  font-family: var(--mono);
+  font-size: 13px;
+  min-width: 2ch;
+  text-align: right;
+}
+
+details.advanced {
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+  margin: 22px 0;
+}
+
+details.advanced > summary {
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 450;
+  list-style-position: inside;
+}
+
+details.advanced[open] > summary {
+  margin-bottom: 16px;
+}
+
+.file-drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------- buttons -- */
+
+button.primary,
+button.ghost,
+a.ghost {
+  font: 500 13.5px/1 var(--sans);
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 11px 18px;
+  border: 1px solid var(--ink);
+  text-decoration: none;
+  display: inline-block;
+}
+
+button.primary {
+  background: var(--ink);
+  color: var(--ground);
+}
+
+button.ghost,
+a.ghost {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--rule-strong);
+  padding: 8px 13px;
+  font-size: 12.5px;
+}
+
+button.ghost:hover,
+a.ghost:hover {
+  border-color: var(--ink);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+.tab:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------------------------ mode banner -- */
+
+.mode {
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--ink);
+  border-radius: 2px;
+  padding: 13px 15px;
+  margin: 20px 0;
+  background: var(--ground);
+}
+
+.mode h3 {
+  font-size: 13.5px;
+  font-weight: 550;
+}
+
+.mode p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 72ch;
+}
+
+.mode .echo {
+  color: var(--ink);
+  font-style: italic;
+}
+
+/* ----------------------------------------------------------------- alerts -- */
+
+.alert {
+  border: 1px solid var(--stop);
+  border-left-width: 3px;
+  background: var(--stop-wash);
+  border-radius: 2px;
+  padding: 12px 15px;
+  margin: 16px 0;
+  font-size: 13.5px;
+}
+
+.alert h3 {
+  font-size: 13.5px;
+  color: var(--stop);
+  margin-bottom: 4px;
+}
+
+.alert.notice {
+  border-color: var(--hold);
+  background: var(--hold-wash);
+}
+
+.alert.notice h3 {
+  color: var(--hold);
+}
+
+.empty {
+  padding: 30px 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.good {
+  border: 1px solid var(--go);
+  border-left-width: 3px;
+  background: var(--go-wash);
+  border-radius: 2px;
+  padding: 12px 15px;
+  font-size: 13.5px;
+  color: var(--go);
+}
+
+/* ------------------------------------------------------------ metric strip -- */
+
+/* One ruled instrument strip divided by hairlines, rather than six cards. */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.metric {
+  padding: 13px 15px;
+  border-left: 1px solid var(--rule);
+}
+
+.metric:first-child {
+  border-left: 0;
+}
+
+.metric .v {
+  font: 500 21px/1.15 var(--mono);
+  letter-spacing: -0.02em;
+  display: block;
+}
+
+.metric .k {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: block;
+}
+
+.metric .v .of {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.metric.alert-value .v {
+  color: var(--stop);
+}
+
+/* ------------------------------------------------------------ trace rail -- */
+
+/* The ledger is the product's argument for itself, so it gets the one bold
+   move on the page: a continuous rail with a node per decision. */
+.ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.ledger::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--rule-strong);
+}
+
+.dec {
+  position: relative;
+  padding: 0 0 3px 26px;
+}
+
+.dec + .dec {
+  margin-top: 14px;
+}
+
+.dec::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 11px;
+  height: 11px;
+  background: var(--muted);
+  outline: 3px solid var(--panel);
+}
+
+.dec.v-continue::before,
+.dec.v-accept::before {
+  background: var(--go);
+}
+.dec.v-replan::before,
+.dec.v-regenerate::before {
+  background: var(--hold);
+}
+.dec.v-escalate::before {
+  background: var(--stop);
+}
+
+.dec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dec-stage {
+  font: 500 13px/1.3 var(--mono);
+}
+
+.dec-verdict {
+  font: 500 11.5px/1 var(--mono);
+  padding: 3px 6px;
+  border-radius: 2px;
+  background: var(--ground);
+  color: var(--muted);
+}
+
+.v-continue .dec-verdict,
+.v-accept .dec-verdict {
+  background: var(--go-wash);
+  color: var(--go);
+}
+.v-replan .dec-verdict,
+.v-regenerate .dec-verdict {
+  background: var(--hold-wash);
+  color: var(--hold);
+}
+.v-escalate .dec-verdict {
+  background: var(--stop-wash);
+  color: var(--stop);
+}
+
+.dec-next {
+  font: 400 12px/1 var(--mono);
+  color: var(--muted);
+}
+
+.dec-reason {
+  margin: 3px 0 0;
+  font-size: 13.5px;
+  max-width: 78ch;
+}
+
+.dec details {
+  margin-top: 6px;
+}
+
+.dec summary {
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dec summary:hover {
+  color: var(--ink);
+}
+
+pre.evidence,
+pre.code {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow-x: auto;
+  font: 400 12.5px/1.6 var(--mono);
+  tab-size: 4;
+}
+
+/* A run in progress appends rows; the movement is the state change itself. */
+.dec.fresh {
+  animation: settle 0.32s ease-out;
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* ------------------------------------------------------------- run status -- */
+
+.running {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--hold);
+  border-radius: 2px;
+  background: var(--ground);
+  margin: 18px 0;
+  font-size: 13.5px;
+}
+
+.pulse {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  background: var(--hold);
+  animation: blink 1.1s steps(2, end) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.running .elapsed {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ----------------------------------------------------------------- tables -- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+th {
+  text-align: left;
+  font-weight: 550;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 0 12px 7px 0;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+td {
+  padding: 9px 12px 9px 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+tr.selectable {
+  cursor: pointer;
+}
+
+tr.selectable:hover td {
+  background: var(--ground);
+}
+
+tr.selected td {
+  background: var(--ground);
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+
+td.num,
+th.num {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.sev {
+  font: 500 11.5px/1 var(--mono);
+  padding: 3px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.sev-critical {
+  background: var(--stop-wash);
+  color: var(--stop);
+}
+.sev-serious {
+  background: var(--stop-wash);
+  color: var(--stop);
+  opacity: 0.82;
+}
+.sev-moderate {
+  background: var(--hold-wash);
+  color: var(--hold);
+}
+.sev-minor {
+  background: var(--ground);
+  color: var(--muted);
+}
+
+.truncate {
+  display: inline-block;
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* ------------------------------------------------------------- test files -- */
+
+details.file {
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  margin-bottom: 9px;
+}
+
+details.file > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+details.file[open] > summary {
+  border-bottom: 1px solid var(--rule);
+}
+
+details.file > summary .lines {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+details.file pre.code {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  max-height: 460px;
+  overflow: auto;
+}
+
+.file-actions {
+  padding: 10px 13px;
+  border-top: 1px solid var(--rule);
+}
+
+/* Python tokens. Hue does the work; weight stays flat so code reads evenly. */
+.t-kw {
+  color: #8a2f8f;
+}
+.t-str {
+  color: var(--go);
+}
+.t-comment {
+  color: var(--muted);
+  font-style: italic;
+}
+.t-num {
+  color: #9a5b12;
+}
+.t-dec {
+  color: var(--link);
+}
+
+iframe.report {
+  width: 100%;
+  height: 800px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  background: var(--panel);
+}
+
+/* -------------------------------------------------------------- responsive -- */
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .metrics {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .metric:nth-child(4) {
+    border-left: 0;
+  }
+  .metric:nth-child(n + 4) {
+    border-top: 1px solid var(--rule);
+  }
+  .row {
+    grid-template-columns: 1fr;
+  }
+  :root {
+    --gutter: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before {
+    animation: none !important;
+    transition: none !important;
+  }
+}
