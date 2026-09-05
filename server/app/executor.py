@@ -316,9 +316,22 @@ def run_test(
                 if step.kind == StepKind.ACTION:
                     failure_kind = FailureKind.LOCATOR_NOT_FOUND
                 else:
-                    # ASSERTION step with no selector = assertion failed
-                    # This is the anti-masking rule: assertions are Tier 0 only
-                    failure_kind = FailureKind.ASSERTION_FAILED
+                    # An assertion whose target was never resolved is the agent
+                    # failing to build a check, not the application failing one.
+                    #
+                    # This used to be reported as ASSERTION_FAILED, which triage
+                    # maps to APP_DEFECT with full confidence -- so a plan naming
+                    # an element that does not exist was published as a defect in
+                    # somebody's application. Two of three "defects" on a stable
+                    # demo site were this, and a tool that cries wolf is not
+                    # trusted the day it is right.
+                    #
+                    # AGENT_ERROR maps to FLAKY: reported honestly, and still
+                    # never healed. The anti-masking rule is about refusing to
+                    # repair assertions, which is untouched -- a genuine
+                    # assertion failure, where the element resolved and the check
+                    # did not hold, is still ASSERTION_FAILED below.
+                    failure_kind = FailureKind.AGENT_ERROR
                 error_text = heal_error or "Step target could not be resolved"
                 results.append(
                     StepResult(

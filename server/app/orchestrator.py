@@ -35,7 +35,7 @@ from app.contracts.contracts import (
 )
 from app.critic import assess_coverage, escalate_if_exhausted, structural_gaps
 from app.executor import run_test
-from app.explorer import explore, dismiss_consent, ExplorationReport
+from app.explorer import _settle, explore, dismiss_consent, ExplorationReport
 from app.llm import LLMConfig, LLMError
 from app.models.models import CompiledTest, RunResult, Severity, StepKind
 from app.paths import resolve_out_dir
@@ -411,6 +411,10 @@ def _step_generate(
                 try:
                     page.context.clear_cookies()
                     page.goto(target_url)
+                    # The first snapshot of the flow is taken right after this;
+                    # without waiting it can be of a shell the framework has not
+                    # filled in yet, and the flow's opening step never resolves.
+                    _settle(page)
                     dismiss_consent(page)
                 except Exception as nav_error:
                     logger.warning(
@@ -424,6 +428,20 @@ def _step_generate(
                     flow, state.url, browser_wrapper, llm, credentials=credentials
                 )
                 compiled.append(compiled_flow)
+
+        # Drop assertions that could not be located, rather than the flows
+        # holding them.
+        #
+        # is_compiled is all-or-nothing, so a flow whose every action resolved
+        # and whose one assertion did not was discarded whole -- three good
+        # steps thrown away for a fourth. The planner names assertions
+        # semantically ("error message") while the resolver matches on text, and
+        # an app whose error reads "Epic sadface: ..." has no word in common with
+        # it, so this was the common case rather than the rare one.
+        #
+        # A flow keeps shipping as long as one assertion survives. A flow with
+        # none is not a test and is left partial deliberately.
+        compiled = [_prune_unresolved_assertions(f, state) for f in compiled]
 
         # Separate fully compiled and partial flows
         fully = [f for f in compiled if f.is_compiled]
@@ -499,6 +517,50 @@ def _step_generate(
                 pass
 
 
+def _prune_unresolved_assertions(flow: Flow, state: OrchestratorState) -> Flow:
+    """Drop assertion steps that never resolved, keeping the flow.
+
+    Returns the flow unchanged when nothing needs dropping, or when dropping
+    would leave it with no assertions at all -- a flow that asserts nothing
+    always passes, which is precisely the shape this project exists to avoid
+    producing. Such a flow stays partial and VALIDATE deals with it.
+
+    Every drop is recorded as a gap, so a shortened flow is visible in the
+    report rather than quietly weaker than the plan it came from.
+    """
+    from dataclasses import replace as dataclass_replace
+
+    unresolved = [
+        s
+        for s in flow.steps
+        if s.kind is StepKind.ASSERTION
+        and s.selector is None
+        and s.verb != "assert_url"
+    ]
+    if not unresolved:
+        return flow
+
+    kept = [s for s in flow.steps if s not in unresolved]
+    if not any(s.kind is StepKind.ASSERTION for s in kept):
+        return flow
+
+    for step in unresolved:
+        gap = Gap(
+            kind="dropped_assertion",
+            description=f"Assertion '{step.target}' in flow '{flow.name}' could not be located",
+            evidence=f"{step.verb} on '{step.target}' - no matching element on the page",
+            severity=Severity.MODERATE,
+        )
+        if not any(g.description == gap.description for g in state.gaps):
+            state.gaps.append(gap)
+
+    logger.info(
+        "compile %s: dropped %d unresolvable assertion(s), %d step(s) remain",
+        flow.id, len(unresolved), len(kept),
+    )
+    return dataclass_replace(flow, steps=kept)
+
+
 def _compile_flow(
     flow: Flow, url: str, browser: Browser, llm: LLMConfig, *, credentials: dict[str, str] | None = None
 ) -> Flow:
@@ -527,6 +589,15 @@ def _compile_flow(
 
     for step in flow.steps:
         try:
+            # assert_url checks the address, so there is no element to find. It
+            # was being handed to the element resolver, which naturally failed
+            # on targets like "inventory address" and marked the whole flow
+            # partial -- a step that cannot be resolved because it has nothing
+            # to resolve.
+            if step.verb == "assert_url":
+                compiled_steps.append(step)
+                continue
+
             # Inject credentials for fill steps with no value FIRST.
             # apply_credentials returns a placeholder value (e.g., ${AIVAR_PASSWORD}),
             # never a resolved secret. The compiled step keeps the placeholder.
@@ -579,6 +650,19 @@ def _compile_flow(
                 try:
                     value = resolve_value(compiled_step.value)
                     browser.act(selector, compiled_step.verb, value, DEFAULTS.action_timeout_ms)
+
+                    # Let the page catch up before the next step reads it.
+                    #
+                    # A click that signs in or navigates returns as soon as the
+                    # click lands, while the destination is still rendering. The
+                    # next step's snapshot then saw the old page, or a blank one,
+                    # and every target after the first click failed to resolve --
+                    # which is why whole flows arrived at VALIDATE with 100%
+                    # unresolved steps and were dropped. Waiting here is what a
+                    # person does between clicking and looking.
+                    page_obj = getattr(browser, "page", None) or getattr(browser, "_page", None)
+                    if page_obj is not None:
+                        _settle(page_obj)
 
                     # Log navigation if this was a click that changed the URL
                     if compiled_step.verb == "click":
@@ -804,6 +888,48 @@ def _step_execute(
         )
 
         names = {f.id: f.name for f in state.compiled_flows}
+
+        # Record what the Healer did, as its own entry in the ledger.
+        #
+        # Repair happens inside the step loop, because a locator has to be
+        # replaced and retried before the next step can run -- there is no point
+        # in the pipeline where healing could be a separate pass. But that left
+        # the ledger showing EXECUTE going straight to TRIAGE, so the one thing
+        # a reader most wants to check -- what the agent changed, and on what
+        # evidence -- was the one thing it never said. The count was reported;
+        # the reasoning was not.
+        healed = [
+            (flow_id, proposal)
+            for flow_id, r in state.flow_results.items()
+            for proposal in r.heal_proposals
+        ]
+        if healed:
+            state.record(
+                Decision.now(
+                    Stage.HEAL,
+                    "healed",
+                    f"Repaired {len(healed)} locator(s) across "
+                    f"{len({fid for fid, _ in healed})} flow(s)",
+                    Stage.TRIAGE,
+                    {
+                        "heals": [
+                            {
+                                "flow": names.get(flow_id, flow_id),
+                                "step_id": p.step_id,
+                                "from": p.old.to_dict() if p.old else None,
+                                "to": p.new.to_dict(),
+                                "confidence": round(p.confidence, 2),
+                                "semantic_match": p.semantic_match,
+                                "reasoning": p.reasoning,
+                            }
+                            for flow_id, p in healed
+                        ],
+                        # Assertions are never in this list, and that is the
+                        # point: a failing assertion is a candidate bug.
+                        "assertions_healed": 0,
+                    },
+                )
+            )
 
         return Decision.now(
             state.stage,
