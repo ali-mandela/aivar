@@ -1,4 +1,4 @@
-# aivar
+﻿# aivar
 
 ## Root statement
 
@@ -174,11 +174,14 @@ Managed entirely with **uv**. No `pip`, no `requirements.txt`.
 cd server
 uv sync                                    # install
 uv run playwright install chromium         # browser binary, first time only
-uv run uvicorn app.main:app --reload --reload-dir app    # serve
+uv run serve                               # serve (see note below)
 uv run pytest tests/generated              # run a generated suite
 ```
 
-`--reload-dir app` is not optional. A run writes pytest files into
+Start the server with `uv run serve`, not with `uvicorn` directly. The
+equivalent long form is
+`uv run uvicorn app.main:app --reload --reload-dir app`, and the
+`--reload-dir app` in it is not optional. A run writes pytest files into
 `tests/generated` and reports into `artifacts/`, both inside the server
 directory, so watching the whole tree means the pipeline restarts the server by
 producing its own output -- killing the background thread mid-run and emptying

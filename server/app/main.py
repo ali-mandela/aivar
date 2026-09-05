@@ -60,7 +60,8 @@ def health() -> dict:
     return out
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Start the development server. Exposed as `uv run serve`."""
     import uvicorn
 
     uvicorn.run(
@@ -78,3 +79,7 @@ if __name__ == "__main__":
         # succeeding.
         reload_dirs=[str(Path(__file__).resolve().parent)],
     )
+
+
+if __name__ == "__main__":
+    main()

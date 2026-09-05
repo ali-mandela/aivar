@@ -13,6 +13,16 @@ dependencies = [
     "python-multipart>=0.0.9",
 ]
 
+[project.scripts]
+# `uv run serve` -- the only correct way to start this in development.
+#
+# Plain `uvicorn app.main:app --reload` watches the whole server directory,
+# which includes tests/generated and artifacts. A run writes its pytest files
+# there, the watcher sees them, and the server restarts mid-run: the pipeline
+# stops itself the moment it succeeds. app/main.py restricts the watcher to the
+# source package, so going through this entry point cannot do that.
+serve = "app.main:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
