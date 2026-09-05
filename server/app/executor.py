@@ -149,6 +149,41 @@ def run_test(
                 )
                 continue
 
+            # assert_url checks the address, not an element. It has no selector
+            # to resolve and nothing to wait for attachment on, so it runs here
+            # rather than falling through the locator machinery -- which would
+            # otherwise report "target could not be resolved" for a step that
+            # never had a target.
+            if step.verb == "assert_url":
+                try:
+                    browser_wrapper.act(None, "assert_url", step.value, guardrails.action_timeout_ms)
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    results.append(
+                        StepResult(
+                            step_id=step.id,
+                            status="passed",
+                            source=Source.NONE,
+                            duration_ms=duration_ms,
+                            failure=None,
+                        )
+                    )
+                    logger.info(f"Step {step_index} ({step.id}): passed (assert_url)")
+                except Exception as e:
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    results.append(
+                        StepResult(
+                            step_id=step.id,
+                            status="failed",
+                            source=Source.NONE,
+                            duration_ms=duration_ms,
+                            failure=FailureKind.ASSERTION_FAILED,
+                            error=str(e),
+                        )
+                    )
+                    logger.info(f"Step {step_index} ({step.id}): failed (assert_url) - {e}")
+                    any_failed = True
+                continue
+
             # Resolve secrets in step.value
             resolved_value = None
             try:
@@ -301,9 +336,15 @@ def run_test(
                 any_failed = True
                 continue
 
-            # Try to wait for element attachment
+            # Try to wait for element attachment.
+            #
+            # Skipped for assert_hidden: that step passes precisely when the
+            # element is absent, so waiting for it to attach fails every time it
+            # is right. Playwright's own wait_for(state="hidden") inside act()
+            # already treats "never attached" as hidden.
             try:
-                browser_wrapper.wait_attached(selector_to_use, guardrails.action_timeout_ms)
+                if step.verb != "assert_hidden":
+                    browser_wrapper.wait_attached(selector_to_use, guardrails.action_timeout_ms)
             except PlaywrightTimeoutError:
                 duration_ms = (time.perf_counter() - start_time) * 1000
                 if step.kind == StepKind.ACTION:

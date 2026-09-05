@@ -4,7 +4,39 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
-Verb = Literal["click", "fill", "wait_visible"]
+Verb = Literal[
+    # Actions
+    "click",
+    "fill",
+    "select",   # choose an option in a <select> / combobox, by visible label
+    "check",    # tick a checkbox or radio
+    "press",    # send a key: Enter, Tab, Escape
+    # Assertions
+    "wait_visible",   # the element is on screen
+    "assert_text",    # the element contains this text
+    "assert_url",     # the address contains this fragment
+    "assert_hidden",  # the element is gone, or was never there
+]
+"""What a step does.
+
+`wait_visible` alone proves only that something appeared, which is most of what
+a test can be wrong about. An app that renders "Invalid credentials" where it
+should render a dashboard passes a visibility check and fails a person's. The
+assertion verbs below are what let a flow state the thing it actually means.
+
+`assert_hidden` is the one with no positive form: logging out, dismissing a
+dialog and deleting a row are all defined by something ceasing to exist.
+"""
+
+ASSERTION_VERBS: tuple[str, ...] = (
+    "wait_visible",
+    "assert_text",
+    "assert_url",
+    "assert_hidden",
+)
+
+# Assertions that read a value rather than merely locating an element.
+VALUE_ASSERTION_VERBS: tuple[str, ...] = ("assert_text", "assert_url")
 Strategy = Literal["role", "label", "placeholder", "text", "testid", "css"]
 
 

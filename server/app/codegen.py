@@ -176,7 +176,9 @@ def render_pytest(
 
     # Process steps
     for step in flow.steps:
-        locator = locator_expr(step.selector)
+        # assert_url is about the page, not an element, so it has no locator to
+        # render -- and a compiled step for it may carry no selector at all.
+        locator = locator_expr(step.selector) if step.selector else None
         kind_desc = f"{step.kind.value}: {step.target}"
         lines.append(f"    # {kind_desc}")
 
@@ -185,11 +187,29 @@ def render_pytest(
         elif step.verb == "fill":
             value_expr_str = _value_expr(step.value)
             lines.append(f"    {locator}.first.fill({value_expr_str})")
+        elif step.verb == "select":
+            lines.append(f"    {locator}.first.select_option(label={_value_expr(step.value)})")
+        elif step.verb == "check":
+            lines.append(f"    {locator}.first.check()")
+        elif step.verb == "press":
+            lines.append(f"    {locator}.first.press({_value_expr(step.value or 'Enter')})")
         elif step.verb == "wait_visible":
             if step.kind == StepKind.ASSERTION:
                 lines.append(f"    expect({locator}.first).to_be_visible()")
             else:
                 lines.append(f"    {locator}.first.wait_for(state=\"visible\")")
+        elif step.verb == "assert_text":
+            # to_contain_text, not to_have_text: a person reading an error
+            # inside a longer banner considers the check met. expect() also
+            # retries, so this rides out a message that renders a beat late.
+            lines.append(f"    expect({locator}.first).to_contain_text({_value_expr(step.value)})")
+        elif step.verb == "assert_url":
+            # Glob rather than a regex: it needs no import in the generated
+            # file, and wait_for_url retries, so an SPA that swaps the address
+            # a moment after the click still passes.
+            lines.append(f"    page.wait_for_url({repr('**' + (step.value or '') + '**')})")
+        elif step.verb == "assert_hidden":
+            lines.append(f"    expect({locator}.first).to_be_hidden()")
         else:
             raise ValueError(f"Unknown verb: {step.verb}")
 

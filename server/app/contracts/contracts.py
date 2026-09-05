@@ -64,8 +64,15 @@ class Flow:
 
     @property
     def is_compiled(self) -> bool:
-        """Every step has a selector, so this flow can be executed."""
-        return all(s.selector is not None for s in self.steps)
+        """Every step that needs a selector has one, so this flow can run.
+
+        assert_url is the exception: it checks the address rather than an
+        element, so it never has a selector and requiring one would discard
+        every flow that asserts where the user landed.
+        """
+        return all(
+            s.selector is not None or s.verb == "assert_url" for s in self.steps
+        )
 
     def to_dict(self) -> dict:
         return {

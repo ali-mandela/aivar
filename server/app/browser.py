@@ -135,17 +135,54 @@ class Browser:
         self, selector: Selector, verb: str, value: str | None, timeout_ms: int
     ) -> None:
         """
-        Resolve the locator and perform the action.
-        Supported verbs: click, fill, wait_visible.
+        Resolve the locator and perform the action or check the assertion.
+
+        Actions:    click, fill, select, check, press
+        Assertions: wait_visible, assert_text, assert_url, assert_hidden
+
+        A failed assertion raises AssertionError, which is deliberately distinct
+        from the locator and configuration errors raised elsewhere: the executor
+        classifies it as ASSERTION_FAILED, and an assertion failure is never
+        healed.
         """
+        if verb == "assert_url":
+            # The only verb about the page rather than an element, so it never
+            # resolves a locator.
+            actual = self._page.url
+            if (value or "") not in actual:
+                raise AssertionError(f"expected url to contain {value!r}, got {actual!r}")
+            return
+
         locator = self.locator(selector)
 
         if verb == "click":
             locator.first.click(timeout=timeout_ms)
         elif verb == "fill":
             locator.first.fill(value or "", timeout=timeout_ms)
+        elif verb == "select":
+            # By visible label: that is what the plan names, and what a person
+            # reads off the screen. Falling back to value covers selects whose
+            # option text and value agree.
+            try:
+                locator.first.select_option(label=value or "", timeout=timeout_ms)
+            except Exception:
+                locator.first.select_option(value or "", timeout=timeout_ms)
+        elif verb == "check":
+            locator.first.check(timeout=timeout_ms)
+        elif verb == "press":
+            locator.first.press(value or "Enter", timeout=timeout_ms)
         elif verb == "wait_visible":
             locator.first.wait_for(state="visible", timeout=timeout_ms)
+        elif verb == "assert_text":
+            locator.first.wait_for(state="visible", timeout=timeout_ms)
+            actual = (locator.first.text_content(timeout=timeout_ms) or "").strip()
+            expected = (value or "").strip()
+            # Substring, not equality: a person reading "Invalid credentials"
+            # inside a longer banner considers the check met.
+            if expected.lower() not in actual.lower():
+                raise AssertionError(f"expected text containing {expected!r}, got {actual!r}")
+        elif verb == "assert_hidden":
+            locator.first.wait_for(state="hidden", timeout=timeout_ms)
         else:
             raise SelectorConfigError(f"Unknown verb '{verb}'")
 
