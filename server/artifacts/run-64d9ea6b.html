@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Quality Report - run-64d9ea6b</title>
+    <style>
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f5f5f5;
+            --text-primary: #000000;
+            --text-secondary: #666666;
+            --border: #cccccc;
+            --pass-bg: #d4edda;
+            --pass-text: #155724;
+            --pass-border: #c3e6cb;
+            --fail-bg: #f8d7da;
+            --fail-text: #721c24;
+            --fail-border: #f5c6cb;
+            --critical-bg: #fff3cd;
+            --critical-text: #856404;
+            --critical-border: #ffeaa7;
+            --serious-bg: #f8d7da;
+            --serious-text: #721c24;
+            --moderate-bg: #d1ecf1;
+            --moderate-text: #0c5460;
+            --minor-bg: #e8f4f8;
+            --minor-text: #164e63;
+            --healed-bg: #ffeaa7;
+            --healed-text: #856404;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg-primary: #1e1e1e;
+                --bg-secondary: #2d2d2d;
+                --text-primary: #e0e0e0;
+                --text-secondary: #999999;
+                --border: #444444;
+                --pass-bg: #1e5631;
+                --pass-text: #90ee90;
+                --pass-border: #2d6e3f;
+                --fail-bg: #5d1f1f;
+                --fail-text: #ff6b6b;
+                --fail-border: #7d2f2f;
+                --critical-bg: #664400;
+                --critical-text: #ffcc66;
+                --critical-border: #8b5a00;
+                --serious-bg: #5d1f1f;
+                --serious-text: #ff6b6b;
+                --moderate-bg: #1f4d5d;
+                --moderate-text: #66ccff;
+                --minor-bg: #2d3d4d;
+                --minor-text: #99ccff;
+                --healed-bg: #664400;
+                --healed-text: #ffcc66;
+            }
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root[data-theme="dark"] {
+                --bg-primary: #1e1e1e;
+                --bg-secondary: #2d2d2d;
+                --text-primary: #e0e0e0;
+                --text-secondary: #999999;
+                --border: #444444;
+                --pass-bg: #1e5631;
+                --pass-text: #90ee90;
+                --pass-border: #2d6e3f;
+                --fail-bg: #5d1f1f;
+                --fail-text: #ff6b6b;
+                --fail-border: #7d2f2f;
+                --critical-bg: #664400;
+                --critical-text: #ffcc66;
+                --critical-border: #8b5a00;
+                --serious-bg: #5d1f1f;
+                --serious-text: #ff6b6b;
+                --moderate-bg: #1f4d5d;
+                --moderate-text: #66ccff;
+                --minor-bg: #2d3d4d;
+                --minor-text: #99ccff;
+                --healed-bg: #664400;
+                --healed-text: #ffcc66;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+
+        h2 {
+            margin: 30px 0 15px 0;
+            font-size: 18px;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 8px;
+        }
+
+        .header {
+            margin-bottom: 30px;
+        }
+
+        .summary-line {
+            font-size: 16px;
+            font-weight: bold;
+            margin-top: 20px;
+            padding: 15px;
+            background: var(--bg-secondary);
+            border-left: 4px solid var(--border);
+        }
+
+        .escalated {
+            background: var(--critical-bg);
+            color: var(--critical-text);
+            border: 2px solid var(--critical-border);
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+
+        th {
+            background: var(--bg-secondary);
+            padding: 12px;
+            text-align: left;
+            border-bottom: 2px solid var(--border);
+            font-weight: bold;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .pass {
+            background: var(--pass-bg);
+            color: var(--pass-text);
+        }
+
+        .fail {
+            background: var(--fail-bg);
+            color: var(--fail-text);
+        }
+
+        .critical {
+            background: var(--critical-bg);
+            color: var(--critical-text);
+        }
+
+        .serious {
+            background: var(--serious-bg);
+            color: var(--serious-text);
+        }
+
+        .moderate {
+            background: var(--moderate-bg);
+            color: var(--moderate-text);
+        }
+
+        .minor {
+            background: var(--minor-bg);
+            color: var(--minor-text);
+        }
+
+        .healed {
+            background: var(--healed-bg);
+            color: var(--healed-text);
+        }
+
+        .status-pass::before {
+            content: "[PASS] ";
+        }
+
+        .status-fail::before {
+            content: "[FAIL] ";
+        }
+
+        code, pre {
+            font-family: "Monaco", "Menlo", "Consolas", "Courier New", monospace;
+            font-size: 13px;
+        }
+
+        pre {
+            background: var(--bg-secondary);
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+        }
+
+        details {
+            margin: 10px 0;
+            padding: 10px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: bold;
+            user-select: none;
+        }
+
+        summary:hover {
+            text-decoration: underline;
+        }
+
+        .meta {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Test Quality Report</h1>
+            <div class="meta">
+                <div>Run ID: <code>run-64d9ea6b</code></div>
+                <div>URL: <code>https://www.saucedemo.com</code></div>
+                <div>Mode: sweep</div>
+                <div>Duration: 65s</div><div>Cost: $0.0000</div>
+            </div>
+        </div>
+
+        
+
+        <h2>Scenarios Covered</h2>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Flow</th><th>Steps</th></tr></thead>
+<tbody>
+<tr class="fail"><td class="status-fail">successful login with standard user</td><td>3/4 steps</td></tr>
+<tr class="fail"><td class="status-fail">locked out user cannot login</td><td>3/4 steps</td></tr>
+<tr class="pass"><td class="status-pass">login fails with empty username</td><td>4/4 steps</td></tr>
+<tr class="fail"><td class="status-fail">login fails with empty password</td><td>3/4 steps</td></tr>
+</tbody>
+</table>
+</div>
+
+        <h2>Failures and Defects</h2>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Step ID</th><th>Verdict</th><th>Confidence</th><th>Reasoning</th></tr></thead>
+<tbody>
+<tr><td>f1s4</td><td class="fail">app_defect</td><td>1.00</td><td>The application did not produce the state the test asserted. Assertion failures are findings, not locator issues.</td></tr>
+<tr><td>f2s4</td><td class="fail">app_defect</td><td>1.00</td><td>The application did not produce the state the test asserted. Assertion failures are findings, not locator issues.</td></tr>
+<tr><td>f4s4</td><td class="fail">app_defect</td><td>1.00</td><td>The application did not produce the state the test asserted. Assertion failures are findings, not locator issues.</td></tr>
+</tbody>
+</table>
+</div>
+
+        
+
+        <h2>Coverage Gaps Remaining</h2>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Severity</th><th>Kind</th><th>Description</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr class="critical"><td class="critical">critical</td><td>missing_page_coverage</td><td>No scenarios for post-login pages (inventory, cart, checkout, etc.); sweep mode should cover all distinct pages discovered.</td><td><code>Exploration digest only shows the login page, but the test plan contains zero flows beyond login. The entry URL is a real e-commerce app (Swag Labs) with inventory, cart, and checkout flows.</code></td></tr>
+<tr class="critical"><td class="critical">critical</td><td>missing_form_coverage</td><td>No coverage of checkout/your-information, checkout-overview, or any cart form that would be reachable after login.</td><td><code>Sweep mode requires every discovered form to have a scenario; login form is the only one addressed.</code></td></tr>
+<tr class="serious"><td class="serious">serious</td><td>missing_negative_flow</td><td>No negative login scenarios beyond locked_out/empty fields — e.g., invalid credentials, username not in accepted list, special characters, SQL injection-like input.</td><td><code>Test plan has only one negative flow (locked out user). Good coverage requires at least one negative flow, but sweep with broader app warrants more.</code></td></tr>
+<tr class="serious"><td class="serious">serious</td><td>missing_error_state</td><td>No error states for post-login failures (e.g., checkout with empty shipping info, removing last item, 404 product).</td><td><code>Only two error_state flows exist, both for empty login fields. App error states beyond login are untested.</code></td></tr>
+<tr class="moderate"><td class="moderate">moderate</td><td>insufficient_browser_compatibility</td><td>No flows exercising sort/dropdown controls on inventory page or menu/logout functionality.</td><td><code>Inventory page typically has sort dropdown and burger menu; none referenced in plan.</code></td></tr>
+</tbody>
+</table>
+</div>
+
+        <h2>Untested Flow Risk</h2>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Severity</th><th>Description</th></tr></thead>
+<tbody>
+<tr class="critical"><td class="critical">critical</td><td>No scenarios for post-login pages (inventory, cart, checkout, etc.); sweep mode should cover all distinct pages discovered.</td></tr>
+<tr class="critical"><td class="critical">critical</td><td>No coverage of checkout/your-information, checkout-overview, or any cart form that would be reachable after login.</td></tr>
+<tr class="serious"><td class="serious">serious</td><td>No negative login scenarios beyond locked_out/empty fields — e.g., invalid credentials, username not in accepted list, special characters, SQL injection-like input.</td></tr>
+<tr class="serious"><td class="serious">serious</td><td>No error states for post-login failures (e.g., checkout with empty shipping info, removing last item, 404 product).</td></tr>
+<tr class="moderate"><td class="moderate">moderate</td><td>No flows exercising sort/dropdown controls on inventory page or menu/logout functionality.</td></tr>
+</tbody>
+</table>
+</div>
+
+        <h2>Decisions</h2>
+<div class="table-wrapper">
+<table>
+<thead><tr><th>Stage</th><th>Verdict</th><th>Reason</th><th>Next Stage</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>explore</td><td>continue</td><td>Discovered 1 pages</td><td>plan</td><td><details><summary>Evidence</summary><pre>{
+  &quot;page_count&quot;: 1,
+  &quot;authenticated&quot;: false,
+  &quot;consent_dismissed&quot;: null
+}</pre></details></td></tr>
+<tr><td>plan</td><td>continue</td><td>Planned 4 flows (happy_path, error_state, negative)</td><td>critique</td><td><details><summary>Evidence</summary><pre>{
+  &quot;flow_count&quot;: 4,
+  &quot;kinds&quot;: [
+    &quot;happy_path&quot;,
+    &quot;error_state&quot;,
+    &quot;negative&quot;
+  ]
+}</pre></details></td></tr>
+<tr><td>critique</td><td>accept</td><td>Coverage acceptable (score: 0.00)</td><td>generate</td><td><details><summary>Evidence</summary><pre>{
+  &quot;gap_count&quot;: 5,
+  &quot;verdict&quot;: &quot;accept&quot;,
+  &quot;score&quot;: 0.0
+}</pre></details></td></tr>
+<tr><td>generate</td><td>continue</td><td>Compiled 1 of 4 flows fully (3 partial)</td><td>validate</td><td><details><summary>Evidence</summary><pre>{
+  &quot;fully_compiled&quot;: 1,
+  &quot;partial&quot;: 3,
+  &quot;planned&quot;: 4
+}</pre></details></td></tr>
+<tr><td>validate</td><td>continue</td><td>Validated and wrote 4 flows</td><td>execute</td><td><details><summary>Evidence</summary><pre>{
+  &quot;validated&quot;: 4,
+  &quot;dropped&quot;: 0
+}</pre></details></td></tr>
+<tr><td>execute</td><td>continue</td><td>Executed 4 flows: 1 passed, 3 failed</td><td>triage</td><td><details><summary>Evidence</summary><pre>{
+  &quot;total&quot;: 4,
+  &quot;passed&quot;: 1,
+  &quot;failed&quot;: 3
+}</pre></details></td></tr>
+<tr><td>triage</td><td>continue</td><td>Triaged 3 failures</td><td>report</td><td><details><summary>Evidence</summary><pre>{
+  &quot;triage_count&quot;: 3
+}</pre></details></td></tr>
+</tbody>
+</table>
+</div>
+
+        <div class="summary-line">1/4 flows passed, 3 defects found, 5 gaps remaining, $0.0000, 65s</div>
+    </div>
+</body>
+</html>

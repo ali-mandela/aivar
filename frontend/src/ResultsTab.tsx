@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   ApiError,
+  getReportHtml,
+  getReportJson,
   getTests,
-  reportHtmlUrl,
-  reportJsonUrl,
   type RunResult,
   type TestFiles,
 } from "./api";
@@ -18,6 +18,8 @@ import {
 export default function ResultsTab({ result }: { result: RunResult | null }) {
   const [tests, setTests] = useState<TestFiles | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const runId = result?.run_id;
   useEffect(() => {
@@ -31,6 +33,32 @@ export default function ResultsTab({ result }: { result: RunResult | null }) {
       live = false;
     };
   }, [runId]);
+
+  // Load the report up front rather than pointing the iframe at the URL: a
+  // missing artifact would otherwise render its 404 body as the report.
+  useEffect(() => {
+    if (!runId) return;
+    let live = true;
+    setReport(null);
+    setReportError(null);
+    getReportHtml(runId)
+      .then((html) => live && setReport(html))
+      .catch(
+        (e) => live && setReportError(e instanceof ApiError ? e.message : String(e)),
+      );
+    return () => {
+      live = false;
+    };
+  }, [runId]);
+
+  async function downloadJson() {
+    if (!runId) return;
+    try {
+      downloadText(`${runId}.json`, await getReportJson(runId), "application/json");
+    } catch (e) {
+      setReportError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
 
   if (!result) {
     return (
@@ -106,31 +134,45 @@ export default function ResultsTab({ result }: { result: RunResult | null }) {
       <section>
         <div className="section-head">
           <h2>Full report</h2>
-          <div className="actions">
-            <a
-              className="ghost"
-              href={reportHtmlUrl(result.run_id)}
-              download={`${result.run_id}.html`}
-            >
-              Download HTML
-            </a>
-            <a
-              className="ghost"
-              href={reportJsonUrl(result.run_id)}
-              download={`${result.run_id}.json`}
-            >
-              Download JSON
-            </a>
-          </div>
+          {report && (
+            <div className="actions">
+              <button
+                className="ghost"
+                onClick={() =>
+                  downloadText(`${result.run_id}.html`, report, "text/html")
+                }
+              >
+                Download HTML
+              </button>
+              <button className="ghost" onClick={() => void downloadJson()}>
+                Download JSON
+              </button>
+            </div>
+          )}
         </div>
-        {/* Fully sandboxed: the report is generated markup and gets no script
-            access and no same-origin privileges. */}
-        <iframe
-          className="report"
-          title={`Test quality report for ${result.run_id}`}
-          src={reportHtmlUrl(result.run_id)}
-          sandbox=""
-        />
+
+        {reportError && (
+          <div className="alert notice">
+            <h3>No report for this run</h3>
+            <div>
+              {reportError} The decision ledger and the tables above still
+              describe what happened.
+            </div>
+          </div>
+        )}
+
+        {!report && !reportError && <p className="empty">Loading report…</p>}
+
+        {/* Rendered from text already fetched, and fully sandboxed: no script
+            execution and no same-origin privileges. */}
+        {report && (
+          <iframe
+            className="report"
+            title={`Test quality report for ${result.run_id}`}
+            srcDoc={report}
+            sandbox=""
+          />
+        )}
       </section>
     </div>
   );
