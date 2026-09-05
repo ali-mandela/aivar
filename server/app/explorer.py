@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from playwright.sync_api import sync_playwright
 
@@ -50,6 +52,13 @@ class PageObservation:
     headings: list[str]        # visible h1-h3 text, in document order, max 10
     controls: list[str]        # short descriptions of interactive controls, e.g. "button: Add to cart", max 25
     reached_by: str | None     # None for the entry page, else the URL it was reached from
+    overlays: list[str] = field(default_factory=list)
+    """Controls that revealed a new screen without changing the URL.
+
+    Dialogs, drawers and tab panels have no address of their own, so they can
+    never appear in `links`. Naming them here is the only way the Planner learns
+    they exist -- and they are frequently the most test-worthy part of an app.
+    """
 
 
 @dataclass
@@ -129,6 +138,14 @@ class ExplorationReport:
             if page.controls:
                 controls_str = ", ".join(page.controls[:10])  # Limit to 10 for brevity
                 page_block.append(f"  Controls: {controls_str}")
+
+            # Screens with no address of their own. Told to the Planner
+            # explicitly, because nothing in the URL list implies they exist.
+            if page.overlays:
+                overlay_str = ", ".join(page.overlays[:8])
+                page_block.append(
+                    f"  Opens in-page (dialog/panel, no URL change): {overlay_str}"
+                )
 
             # Check if adding this block would exceed max_chars
             block_text = "\n".join(page_block)
@@ -521,6 +538,282 @@ def _is_logout_link(url: str) -> bool:
     return "logout" in url_lower or "signout" in url_lower or "sign-out" in url_lower
 
 
+# ---------------------------------------------------------------------------
+# Seeing the page the way a person does
+#
+# A human does not read hrefs, does not treat ?sort=asc as a different screen,
+# and does not decide a page is ready the instant the DOM parses. The helpers
+# below encode those three habits.
+# ---------------------------------------------------------------------------
+
+# Path segments that are record ids rather than distinct screens: /order/1042
+# and /order/1043 are one screen a human would test once.
+_ID_SEGMENT_RE = re.compile(
+    r"^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{24,})$",
+    re.IGNORECASE,
+)
+
+# Controls that can reveal a screen. "link" is included because an anchor
+# written as href="#" or href="javascript:void(0)" navigates via JavaScript and
+# is invisible to href harvesting -- that is the ordinary shape of a
+# single-page app. Anchors carrying a real href are filtered out at click time
+# (see _href_is_dead): they are already collected, and clicking a footer full of
+# social links only opens external tabs.
+NAVIGATIONAL_ROLES = ("button", "tab", "menuitem", "link")
+
+# Never click these while exploring: they end the session or leave the app.
+_AVOID_CLICK_WORDS = (
+    "logout", "log out", "sign out", "signout", "delete", "remove",
+    "cancel account", "close account", "deactivate", "download",
+)
+
+
+def _normalize_url(url: str) -> str:
+    """A stable key for 'have I already been here'.
+
+    Drops the fragment, sorts query parameters and removes a trailing slash, so
+    /products, /products/ and /products?b=2&a=1 collapse to one entry instead of
+    spending three of the crawl's page budget.
+    """
+    try:
+        parts = urlparse(url)
+        query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)))
+        path = parts.path.rstrip("/") or "/"
+        return urlunparse((parts.scheme, parts.netloc, path, "", query, ""))
+    except Exception:
+        return url
+
+
+def _screen_signature(url: str) -> str:
+    """A key for 'is this the same *kind* of screen'.
+
+    Record ids in the path are replaced with a placeholder and query values are
+    dropped, so twenty product pages read as one screen. Without this the page
+    budget is spent enumerating rows of a table rather than finding new screens.
+    """
+    try:
+        parts = urlparse(url)
+        segments = [
+            "{id}" if _ID_SEGMENT_RE.match(seg) else seg
+            for seg in parts.path.strip("/").split("/")
+            if seg
+        ]
+        keys = ",".join(sorted(k for k, _ in parse_qsl(parts.query)))
+        return f"{parts.netloc}/{'/'.join(segments)}" + (f"?{keys}" if keys else "")
+    except Exception:
+        return url
+
+
+def _settle(page: Any, timeout_ms: int = 3000, idle_ms: int = 1200) -> None:
+    """Wait until the page looks ready to a person, not merely parsed.
+
+    domcontentloaded fires before the framework has rendered anything, so on a
+    React or Vue app a snapshot taken then sees an empty shell. Waiting for the
+    network to go quiet is what a human waiting for the spinner to stop is
+    actually doing. Both waits are best-effort: a page that streams forever
+    still gets explored rather than failing the run.
+
+    `idle_ms` is deliberately much shorter than `timeout_ms`. Apps with polling
+    or analytics beacons never reach networkidle at all, and waiting the full
+    timeout on each of them turned a six-page crawl into a minute of dead air.
+    """
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        pass
+    try:
+        page.wait_for_load_state("networkidle", timeout=idle_ms)
+    except Exception:
+        # Long-polling and analytics beacons mean networkidle never arrives on
+        # some apps. The DOM wait above already happened; carry on.
+        pass
+
+
+def _screen_digest(browser_wrapper: Browser) -> str:
+    """A fingerprint of what is currently on screen.
+
+    Used to tell 'the click opened something new' from 'the click did nothing',
+    which is how a person knows a modal appeared even though the URL did not
+    change.
+    """
+    try:
+        nodes = browser_wrapper.snapshot()
+        parts = sorted(f"{n.role}:{n.name}" for n in nodes if n.visible and n.name)
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+def _looks_authenticated(page: Any, browser_wrapper: Browser, before_url: str) -> bool:
+    """Decide whether a login attempt worked.
+
+    Checked the way a person checks: the password box is gone, or the address
+    changed, or something that only appears when signed in is now on screen.
+
+    The previous implementation compared a placeholder to the exact string
+    "Password", so any app writing "password", "Enter your password" or using a
+    label instead reported a successful login as failed.
+    """
+    try:
+        still_asking = any(
+            el.is_visible() for el in page.query_selector_all("input[type='password']")
+        )
+    except Exception:
+        still_asking = False
+
+    if not still_asking:
+        return True
+
+    try:
+        if page.url != before_url:
+            return True
+    except Exception:
+        pass
+
+    # A sign-out affordance is the clearest signal a human uses.
+    try:
+        for node in browser_wrapper.snapshot():
+            name = (node.name or "").lower()
+            if node.visible and any(w in name for w in ("logout", "log out", "sign out")):
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _should_avoid_clicking(name: str, safe_mode: bool) -> bool:
+    """Whether exploring should leave this control alone."""
+    lowered = (name or "").strip().lower()
+    if not lowered:
+        return True
+    if any(word in lowered for word in _AVOID_CLICK_WORDS):
+        return True
+    if is_destructive(lowered):
+        return True
+    if safe_mode and any(word in lowered for word in SUBMIT_WORDS):
+        return True
+    return False
+
+
+def _href_is_dead(locator: Any) -> bool:
+    """Whether an anchor goes nowhere on its own.
+
+    href="#", href="javascript:void(0)" and a missing href all mean the same
+    thing: the destination lives in a click handler, not in the markup. Those
+    are exactly the anchors href harvesting cannot follow, and on a single-page
+    app they are most of them.
+    """
+    try:
+        href = (locator.get_attribute("href") or "").strip()
+    except Exception:
+        return False
+    return href in ("", "#") or href.lower().startswith("javascript:")
+
+
+def _discover_by_clicking(
+    page: Any,
+    browser_wrapper: Browser,
+    current_url: str,
+    *,
+    entry_url: str,
+    same_origin_only: bool,
+    safe_mode: bool,
+    max_clicks: int = 8,
+) -> tuple[list[str], list[str]]:
+    """Find screens that no anchor tag points at.
+
+    Harvesting `a[href]` finds only what a server-rendered site links to. A
+    single-page app routes through onClick handlers, and its most test-worthy
+    screens -- carts, dialogs, wizards -- often have no URL at all. A person
+    finds those by clicking things that look clickable and noticing the screen
+    changed; this does the same.
+
+    Returns (urls, overlays): real URLs reached by clicking, and the names of
+    controls that changed the screen without navigating (dialogs, drawers,
+    tabs). Overlays are reported so the Planner knows they exist even though
+    they cannot be reached by navigation.
+
+    The page is returned to `current_url` after every click, because a click
+    that navigates would otherwise silently move the crawl somewhere else.
+    """
+    found_urls: list[str] = []
+    overlays: list[str] = []
+
+    try:
+        candidates = [
+            n
+            for n in browser_wrapper.snapshot()
+            if n.visible
+            and n.role in NAVIGATIONAL_ROLES
+            and n.name
+            and not _should_avoid_clicking(n.name, safe_mode)
+        ]
+    except Exception:
+        return ([], [])
+
+    # Deduplicate by name: two buttons reading "Add to cart" are one behaviour.
+    seen_names: set[str] = set()
+    unique: list[Any] = []
+    for node in candidates:
+        key = node.name.strip().lower()
+        if key not in seen_names:
+            seen_names.add(key)
+            unique.append(node)
+
+    for node in unique[:max_clicks]:
+        # Measured immediately before this click, not once at the top: an
+        # earlier click can leave the page permanently changed ("Add to cart"
+        # becomes "Remove"), and comparing against a stale baseline then reports
+        # every later control as having opened something.
+        try:
+            before = _screen_digest(browser_wrapper)
+        except Exception:
+            before = ""
+
+        try:
+            locator = page.get_by_role(node.role, name=node.name).first
+            if not locator.is_visible(timeout=500):
+                continue
+            # An anchor with a real destination was already recorded from its
+            # href. Only click the ones that navigate by script.
+            if node.role == "link" and not _href_is_dead(locator):
+                continue
+            locator.click(timeout=2500)
+            _settle(page, timeout_ms=2000, idle_ms=600)
+        except Exception:
+            # A control that will not click is not an error: it may be disabled,
+            # covered, or have moved. Try the next one.
+            continue
+
+        navigated = False
+        try:
+            after_url = page.url
+            if _normalize_url(after_url) != _normalize_url(current_url):
+                navigated = True
+                if not same_origin_only or _is_same_origin(entry_url, after_url):
+                    if after_url not in found_urls and not _is_logout_link(after_url):
+                        found_urls.append(after_url)
+            elif _screen_digest(browser_wrapper) != before:
+                # Same address, different screen: a dialog or a tab panel.
+                overlays.append(node.name)
+                navigated = True  # the screen changed; put it back
+        except Exception:
+            pass
+
+        # Only pay for a reload when the click actually moved us. Most clicks do
+        # nothing at all, and re-navigating after each one was the single
+        # largest cost in the crawl.
+        if navigated:
+            try:
+                page.goto(current_url, wait_until="domcontentloaded")
+                _settle(page, timeout_ms=2000, idle_ms=600)
+            except Exception:
+                break
+
+    return (found_urls, overlays)
+
+
 def dismiss_consent(page: Any, timeout_ms: int = 1500) -> str | None:
     """
     Dismiss a consent/cookie banner by clicking a consent button.
@@ -532,6 +825,10 @@ def dismiss_consent(page: Any, timeout_ms: int = 1500) -> str | None:
     Strategy (in order):
     1. Try buttons/links whose accessible name case-insensitively matches
        one of CONSENT_TEXTS (in order, preferring shorter, more specific matches).
+       Matched with exact=True: Playwright's `name=` is a substring match by
+       default, so the "ok" entry matched "Br-ok-en Images" and every other
+       name containing those two letters. On a link, clicking it navigated away
+       before exploration had observed a single page.
     2. Fall back to common ids/classes: #onetrust-accept-btn-handler, .cc-allow,
        [aria-label*="accept" i], [id*="cookie" i] button
 
@@ -549,7 +846,7 @@ def dismiss_consent(page: Any, timeout_ms: int = 1500) -> str | None:
             try:
                 # Use get_by_role to find visible buttons or links with matching accessible name
                 # (case-insensitive match)
-                locator = page.get_by_role("button", name=consent_text)
+                locator = page.get_by_role("button", name=consent_text, exact=True)
                 if locator.first.is_visible(timeout=timeout_ms):
                     # Found a button with this accessible name
                     accessible_name = locator.first.get_attribute("aria-label") or consent_text
@@ -560,7 +857,7 @@ def dismiss_consent(page: Any, timeout_ms: int = 1500) -> str | None:
 
             # Also try links
             try:
-                locator = page.get_by_role("link", name=consent_text)
+                locator = page.get_by_role("link", name=consent_text, exact=True)
                 if locator.first.is_visible(timeout=timeout_ms):
                     accessible_name = locator.first.get_attribute("aria-label") or consent_text
                     locator.first.click(timeout=timeout_ms)
@@ -673,6 +970,7 @@ def explore(
     start_time = time.perf_counter()
     playwright = None
     browser = None
+    context = None
     page = None
     browser_wrapper = None
 
@@ -683,19 +981,33 @@ def explore(
     consent_dismissed: str | None = None
     skipped_controls: list[str] = []
 
-    visited_urls = set()
+    visited_urls: set[str] = set()
+    # Screen shapes already seen, so /order/1 does not also spend the page
+    # budget on /order/2 ... /order/20. See _screen_signature.
+    visited_signatures: set[str] = set()
     to_visit = []  # (url, depth) - starts empty, we add the entry URL after processing it
 
     try:
         # Launch browser
         playwright = sync_playwright().start()
         browser = playwright.chromium.launch(headless=headless)
-        page = browser.new_page()
+        # A context, not a bare page: it is the only place Playwright lets us
+        # fix the viewport, and later the seam for tracing and storage_state.
+        # Without an explicit viewport this ran at Playwright's 800x600 default
+        # while every later stage used 1280x720 -- so exploration saw a
+        # collapsed mobile nav and planned against elements the executor would
+        # never find.
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            locale="en-US",
+        )
+        page = context.new_page()
         browser_wrapper = Browser(page)
 
         # Navigate to entry page
         try:
             page.goto(url, wait_until="domcontentloaded")
+            _settle(page)
         except Exception as e:
             errors.append(f"Failed to load entry page {url}: {str(e)}")
             return ExplorationReport(
@@ -717,7 +1029,8 @@ def explore(
         current_url = page.url
         entry_page = _extract_page_data(page, browser_wrapper, current_url, 0, None)
         pages.append(entry_page)
-        visited_urls.add(current_url)
+        visited_urls.add(_normalize_url(current_url))
+        visited_signatures.add(_screen_signature(current_url))
 
         # Check for login form on entry page
         if entry_page.forms:
@@ -769,11 +1082,7 @@ def explore(
                         pass
 
                     # Check if authenticated
-                    current_url = page.url
-                    snap_nodes = browser_wrapper.snapshot()
-                    has_password_field = any(n.tag == "input" and n.placeholder == "Password" for n in snap_nodes)
-
-                    if not has_password_field or current_url != url:
+                    if _looks_authenticated(page, browser_wrapper, url):
                         authenticated = True
                         logger.info(f"Login successful, authenticated={authenticated}")
 
@@ -801,12 +1110,13 @@ def explore(
         if authenticated:
             try:
                 post_login_url = page.url
-                if post_login_url not in visited_urls:
+                if _normalize_url(post_login_url) not in visited_urls:
                     post_login_page = _extract_page_data(
                         page, browser_wrapper, post_login_url, 0, url
                     )
                     pages.append(post_login_page)
-                    visited_urls.add(post_login_url)
+                    visited_urls.add(_normalize_url(post_login_url))
+                    visited_signatures.add(_screen_signature(post_login_url))
                     seed_page = post_login_page
                     logger.info(
                         "Post-login page observed: %s (%d links)",
@@ -815,9 +1125,39 @@ def explore(
             except Exception as e:
                 logger.warning("Could not observe post-login page: %s", e)
 
+        # The seed page is observed outside the crawl loop, so click discovery
+        # has not run on it yet -- and after a login it is the landing page,
+        # usually the richest screen in the app. Explore it the same way.
+        try:
+            seed_clicked, seed_overlays = _discover_by_clicking(
+                page,
+                browser_wrapper,
+                page.url,
+                entry_url=url,
+                same_origin_only=same_origin_only,
+                safe_mode=safe_mode,
+            )
+            # PageObservation is frozen, so rebuild it and swap it into `pages`.
+            for found in seed_clicked:
+                if found not in seed_page.links:
+                    seed_page.links.append(found)
+            updated = replace(seed_page, overlays=seed_overlays)
+            for i, observed in enumerate(pages):
+                if observed is seed_page:
+                    pages[i] = updated
+                    break
+            seed_page = updated
+            if seed_clicked or seed_overlays:
+                logger.info(
+                    "Seed page: %d screen(s) reached by clicking, %d in-page panel(s)",
+                    len(seed_clicked), len(seed_overlays),
+                )
+        except Exception as e:
+            logger.warning("Click discovery on seed page failed: %s", e)
+
         # Seed the crawl queue from whichever page we actually ended up on.
         for link in seed_page.links:
-            if link not in visited_urls:
+            if _normalize_url(link) not in visited_urls:
                 if not same_origin_only or _is_same_origin(url, link):
                     to_visit.append((link, 1))
 
@@ -827,10 +1167,20 @@ def explore(
             current_url, depth = to_visit[to_visit_idx]
             to_visit_idx += 1
 
-            if current_url in visited_urls or depth > max_depth:
+            # Compare normalized: /cart, /cart/ and /cart?ref=nav are one screen,
+            # and counting them separately spent the page budget three times over.
+            visit_key = _normalize_url(current_url)
+            if visit_key in visited_urls or depth > max_depth:
                 continue
 
-            visited_urls.add(current_url)
+            # Twenty rows of a table are twenty URLs but one screen. Visit the
+            # first, then move on to somewhere genuinely new.
+            signature = _screen_signature(current_url)
+            if signature in visited_signatures:
+                continue
+
+            visited_urls.add(visit_key)
+            visited_signatures.add(signature)
 
             # Skip logout links to preserve session
             if _is_logout_link(current_url):
@@ -839,11 +1189,30 @@ def explore(
 
             try:
                 page.goto(current_url, wait_until="domcontentloaded")
+                _settle(page)
                 current_page_url = page.url
 
                 # Observe the page
                 reached_by = url if len(pages) > 1 else None  # Track where this page was reached from
                 page_obs = _extract_page_data(page, browser_wrapper, current_page_url, depth, reached_by)
+
+                # Anchors alone miss every SPA route and dialog, so also click
+                # the things a person would click and see where they land.
+                if depth < max_depth:
+                    clicked_urls, overlays = _discover_by_clicking(
+                        page,
+                        browser_wrapper,
+                        current_page_url,
+                        entry_url=url,
+                        same_origin_only=same_origin_only,
+                        safe_mode=safe_mode,
+                    )
+                    for found in clicked_urls:
+                        if found not in page_obs.links:
+                            page_obs.links.append(found)
+                    # Frozen dataclass: rebuild rather than assign.
+                    page_obs = replace(page_obs, overlays=overlays)
+
                 pages.append(page_obs)
 
                 # In safe_mode, record any destructive controls found on this page
@@ -860,7 +1229,11 @@ def explore(
 
                 # Add links to visit queue
                 for link in page_obs.links:
-                    if link not in visited_urls and len(pages) < max_pages and depth < max_depth:
+                    if _normalize_url(link) in visited_urls:
+                        continue
+                    if _screen_signature(link) in visited_signatures:
+                        continue
+                    if len(pages) < max_pages and depth < max_depth:
                         if not same_origin_only or _is_same_origin(url, link):
                             to_visit.append((link, depth + 1))
 
@@ -873,6 +1246,11 @@ def explore(
         if page is not None:
             try:
                 page.close()
+            except Exception:
+                pass
+        if context is not None:
+            try:
+                context.close()
             except Exception:
                 pass
         if browser is not None:
