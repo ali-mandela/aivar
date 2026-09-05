@@ -114,9 +114,11 @@ passes. The report's job is an honest account of coverage, including its holes.
 the database is a convenience layer for history. A store outage costs run
 history, never a run -- keep it that way.
 
-**Relative output paths resolve against the server root**, via
+**Relative output paths resolve against the repository root**, via
 `app/paths.py::resolve_out_dir`, not the working directory. Do not reintroduce
-bare relative paths.
+bare relative paths, and do not move run output back inside `server/`: uvicorn's
+reloader watches that directory for Python files, and the generated suite is
+Python files, so a run there restarts the server that is running it.
 
 **Never log or echo credentials.** Secrets travel as `${NAME}` placeholders
 (`app/secrets.py`) and are resolved as late as possible. `redact` exists; use it.
