@@ -979,3 +979,36 @@ iframe.report {
     transition: none !important;
   }
 }
+
+/* Evidence facts: the leftover scalars of a decision, as labelled rows.
+   Printed as raw JSON these read as a log file; the numbers a person checks
+   first -- how many flows compiled, the coverage score, why a run escalated --
+   deserve to be legible at a glance. */
+dl.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 20px;
+  margin: 12px 0 4px;
+}
+
+dl.facts > div {
+  min-width: 0;
+}
+
+dl.facts dt {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+dl.facts dd {
+  margin: 0;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+table.heals code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

@@ -332,13 +332,124 @@ function TriageTable({ triaged }: { triaged: Triaged[] }) {
   );
 }
 
+type Heal = {
+  flow: string;
+  step_id: string;
+  to: Record<string, unknown>;
+  from?: Record<string, unknown> | null;
+  confidence: number;
+  reasoning?: string;
+};
+
+function isHeals(v: unknown): v is Heal[] {
+  return isArrayOf<Heal>(
+    v,
+    (x) => typeof x.flow === "string" && typeof x.confidence === "number",
+  );
+}
+
+function selectorText(s: Record<string, unknown> | null | undefined): string {
+  if (!s) return "—";
+  const strategy = typeof s.strategy === "string" ? s.strategy : "?";
+  const value = typeof s.value === "string" ? s.value : "";
+  return `${strategy}=${value}`;
+}
+
+/** What the healer changed, and why it believed the change was right. The count
+ *  of repairs is the least interesting part: what a reader needs to judge is
+ *  which locator was swapped for which, and on what evidence. */
+function HealTable({ heals }: { heals: Heal[] }) {
+  return (
+    <table className="heals">
+      <thead>
+        <tr>
+          <th>Flow</th>
+          <th>Was</th>
+          <th>Now</th>
+          <th className="num">Confidence</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        {heals.map((h, i) => (
+          <tr key={`${h.step_id}-${i}`}>
+            <td>{h.flow}</td>
+            <td>
+              <code>{selectorText(h.from)}</code>
+            </td>
+            <td>
+              <code>{selectorText(h.to)}</code>
+            </td>
+            <td className="num">{Math.round(h.confidence * 100)}%</td>
+            <td>{h.reasoning || "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** Turns snake_case keys into sentence case: "fully_compiled" reads as
+ *  "Fully compiled". */
+function label(key: string): string {
+  const words = key.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** The leftover scalars, as labelled rows rather than a JSON dump.
+ *
+ *  These are the numbers a reader most wants at a glance -- how many flows
+ *  compiled, what the coverage score was, why a run escalated -- and printing
+ *  them as `{"fully_compiled": 0, "partial": 4}` made the ledger look like a
+ *  log file. Anything genuinely nested still falls back to JSON, because
+ *  inventing a layout for a shape we do not know is worse than showing it
+ *  plainly. */
+function Facts({ facts }: { facts: Record<string, unknown> }) {
+  const entries = Object.entries(facts);
+  if (entries.length === 0) return null;
+
+  const simple = entries.filter(
+    ([, v]) => v === null || ["string", "number", "boolean"].includes(typeof v),
+  );
+  const complex = Object.fromEntries(entries.filter(([k]) => !simple.some(([s]) => s === k)));
+
+  return (
+    <>
+      {simple.length > 0 && (
+        <dl className="facts">
+          {simple.map(([k, v]) => (
+            <div key={k}>
+              <dt>{label(k)}</dt>
+              <dd>
+                {typeof v === "number" && !Number.isInteger(v)
+                  ? v.toFixed(2)
+                  : String(v ?? "—")}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {Object.keys(complex).length > 0 && (
+        <pre className="evidence">{JSON.stringify(complex, null, 2)}</pre>
+      )}
+    </>
+  );
+}
+
 /** Evidence, rendered for reading where its shape is known and as JSON
  *  otherwise. A count on its own ("discovered 5 pages", "planned 4 flows")
  *  cannot be checked; the point of the ledger is that a human can verify the
  *  claim, which needs the things themselves. */
 function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
-  const { pages, flows, compiled, executed, triaged } = evidence;
-  const handled = new Set(["pages", "flows", "compiled", "executed", "triaged"]);
+  const { pages, flows, compiled, executed, triaged, heals } = evidence;
+  const handled = new Set([
+    "pages",
+    "flows",
+    "compiled",
+    "executed",
+    "triaged",
+    "heals",
+  ]);
   const rest = Object.fromEntries(
     Object.entries(evidence).filter(([k]) => !handled.has(k)),
   );
@@ -374,9 +485,8 @@ function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
       {isCompiledFlows(compiled) && <CompiledTable flows={compiled} />}
       {isExecutedFlows(executed) && <ExecutedTable flows={executed} />}
       {isTriaged(triaged) && <TriageTable triaged={triaged} />}
-      {Object.keys(rest).length > 0 && (
-        <pre className="evidence">{JSON.stringify(rest, null, 2)}</pre>
-      )}
+      {isHeals(heals) && <HealTable heals={heals} />}
+      <Facts facts={rest} />
     </details>
   );
 }
