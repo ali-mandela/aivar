@@ -80,6 +80,16 @@ export default function ResultsTab({ result }: { result: RunResult | null }) {
           </span>
         </div>
 
+        <p className="hint">
+          Ordinary pytest files, and the point of the whole run. Nothing here
+          needs this agent to run it —{" "}
+          <span className="mono">pytest tests/generated</span> works on its own.
+          If a flow signs in, set{" "}
+          <span className="mono">AIVAR_USERNAME</span> and{" "}
+          <span className="mono">AIVAR_PASSWORD</span> first: credentials are
+          read from the environment, never written into the files.
+        </p>
+
         <ErrorBox error={error} title="Could not load the generated suite" />
 
         {tests?.stale && (
@@ -94,7 +104,11 @@ export default function ResultsTab({ result }: { result: RunResult | null }) {
         )}
 
         {files.length === 0 && !error && (
-          <p className="empty">This run produced no test files.</p>
+          <p className="empty">
+            This run produced no test files — no flow compiled far enough to be
+            worth writing. The decision ledger on the Run tab names the steps
+            that could not be found.
+          </p>
         )}
 
         {files.map(([name, source]) => (
@@ -127,6 +141,9 @@ export default function ResultsTab({ result }: { result: RunResult | null }) {
       <section>
         <div className="section-head">
           <h2>Untested flow risk</h2>
+          <span className="aside">
+            What a green suite would still not have proved.
+          </span>
         </div>
         <RiskTable risks={result.untested_flow_risk} />
       </section>

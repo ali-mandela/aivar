@@ -1012,3 +1012,31 @@ table.heals code {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+/* A metric's number is meaningless to anyone who does not already know what
+   this agent counts. "Gaps: 8" needs to say gaps in what. */
+.metric .m-hint {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  margin-top: 3px;
+  max-width: 22ch;
+}
+
+/* What a stage was doing, under its name. The ledger is meant to be checkable
+   by someone who has never seen this pipeline before. */
+.dec-what {
+  margin: 2px 0 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.dec-stage,
+.dec-verdict {
+  cursor: help;
+}
+
+.alert .hint {
+  margin-top: 8px;
+}

@@ -28,19 +28,24 @@ export function Metric({
   value,
   of,
   alarm = false,
+  hint,
 }: {
   label: string;
   value: ReactNode;
   of?: number;
   alarm?: boolean;
+  /** One line saying what the number means. "Gaps: 8" tells a reader nothing
+   *  they can act on unless they already know what this agent counts as a gap. */
+  hint?: string;
 }) {
   return (
-    <div className={`metric${alarm ? " alert-value" : ""}`}>
+    <div className={`metric${alarm ? " alert-value" : ""}`} title={hint}>
       <span className="v">
         {value}
         {of !== undefined && <span className="of">/{of}</span>}
       </span>
       <span className="k">{label}</span>
+      {hint && <span className="m-hint">{hint}</span>}
     </div>
   );
 }
@@ -55,7 +60,36 @@ const KNOWN_VERDICTS = new Set([
   "replan",
   "regenerate",
   "escalate",
+  "healed",
 ]);
+
+/** What each stage was doing, in a sentence.
+ *
+ *  The ledger's whole purpose is that a person can check the agent's reasoning,
+ *  and "triage · continue · next: report" is only checkable by someone who
+ *  already knows the pipeline. These are for everyone else. */
+const STAGE_WHAT: Record<string, string> = {
+  explore: "Opened the app and crawled it to see what is there",
+  plan: "Wrote test flows covering what exploration found",
+  critique: "Checked the plan for coverage gaps before writing any code",
+  generate: "Found the real page elements and wrote the pytest files",
+  validate: "Checked the generated files are runnable",
+  execute: "Ran the flows against the live app",
+  triage: "Decided whether each failure is a bug or a broken test",
+  heal: "Repaired locators that had drifted",
+  report: "Wrote the test quality report",
+  escalated: "Stopped early and said why, rather than pretending to succeed",
+};
+
+/** What each verdict decided. */
+const VERDICT_WHAT: Record<string, string> = {
+  continue: "went on to the next stage",
+  accept: "coverage was good enough to build on",
+  replan: "sent the plan back to be rewritten",
+  regenerate: "tried compiling the flows again",
+  escalate: "could not proceed honestly, so it stopped",
+  healed: "replaced a locator and carried on",
+};
 
 export function DecisionLedger({
   decisions,
@@ -80,10 +114,17 @@ export function DecisionLedger({
             className={`dec v-${verdict}${i >= freshFrom ? " fresh" : ""}`}
           >
             <div className="dec-head">
-              <span className="dec-stage">{d.stage}</span>
-              <span className="dec-verdict">{d.verdict}</span>
+              <span className="dec-stage" title={STAGE_WHAT[d.stage]}>
+                {d.stage}
+              </span>
+              <span className="dec-verdict" title={VERDICT_WHAT[d.verdict]}>
+                {d.verdict}
+              </span>
               <span className="dec-next">next: {d.next_stage}</span>
             </div>
+            {STAGE_WHAT[d.stage] && (
+              <p className="dec-what">{STAGE_WHAT[d.stage]}</p>
+            )}
             <p className="dec-reason">{d.reason}</p>
             {hasEvidence && <Evidence evidence={d.evidence} />}
           </li>

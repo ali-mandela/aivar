@@ -338,11 +338,17 @@ export default function RunTab({
 
       {result?.escalated && !running && (
         <div className="alert" role="alert">
-          <h3>Escalated</h3>
+          <h3>Stopped early</h3>
           <div>
             {result.escalation_reason ??
               "The run could not reach acceptable coverage."}
           </div>
+          <p className="hint">
+            The agent stopped rather than hand you a suite it did not believe
+            in. The decision ledger below shows the stage it gave up at and why.
+            {" "}
+            {nextStepFor(result.escalation_reason)}
+          </p>
         </div>
       )}
 
@@ -357,16 +363,34 @@ export default function RunTab({
               label="Flows passed"
               value={result.flows.passed}
               of={result.flows.total}
+              hint="User journeys that ran green"
             />
-            <Metric label="Gaps" value={result.gaps.length} />
-            <Metric label="Heals" value={result.heals_applied} />
+            <Metric
+              label="Gaps"
+              value={result.gaps.length}
+              hint="Things worth testing that this suite does not cover"
+            />
+            <Metric
+              label="Heals"
+              value={result.heals_applied}
+              hint="Locators the agent repaired itself"
+            />
             <Metric
               label="Defects"
               value={result.defects_found}
               alarm={result.defects_found > 0}
+              hint="Failures that look like bugs in your app, not in the tests"
             />
-            <Metric label="Cost" value={money(result.cost_usd)} />
-            <Metric label="Duration" value={seconds(result.duration_s)} />
+            <Metric
+              label="Cost"
+              value={money(result.cost_usd)}
+              hint="Model spend for this run"
+            />
+            <Metric
+              label="Duration"
+              value={seconds(result.duration_s)}
+              hint="Wall clock, start to report"
+            />
           </div>
           <p style={{ marginTop: 12, color: "var(--muted)", fontSize: 13.5 }}>
             {result.summary}
@@ -387,6 +411,27 @@ export default function RunTab({
       )}
     </div>
   );
+}
+
+/** What to try next, for the ways a run actually gives up.
+ *
+ *  "No flows survived validation" is accurate and tells a reader nothing they
+ *  can do about it. Each of these is a real cause with a real remedy. */
+function nextStepFor(reason: string | null | undefined): string {
+  const r = (reason ?? "").toLowerCase();
+  if (r.includes("survived validation") || r.includes("no flows compiled")) {
+    return "This usually means the agent could not find the elements it planned against — most often because it never got past a sign-in. Adding a username and password is the first thing to try.";
+  }
+  if (r.includes("0 pages") || r.includes("exploration")) {
+    return "Exploration found nothing to test. Check the URL loads in a normal browser, and that it is reachable from this machine.";
+  }
+  if (r.includes("coverage")) {
+    return "Try raising the maximum flows in advanced settings, or narrowing the focus so the plan has a smaller target to cover well.";
+  }
+  if (r.includes("budget") || r.includes("cost") || r.includes("seconds")) {
+    return "The run hit its time or cost limit. Lower the maximum pages to explore, or raise the limit and run again.";
+  }
+  return "Running again often helps: planning is model-driven and varies between runs.";
 }
 
 /** Animates only rows that arrived since the last render, so a finished run
