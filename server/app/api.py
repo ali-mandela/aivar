@@ -44,6 +44,56 @@ _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 
 
+def _job_file(job_id: str) -> Path:
+    return resolve_out_dir("artifacts/jobs") / f"{job_id}.json"
+
+
+def _persist_job(job_id: str, job: dict[str, Any]) -> None:
+    """Mirror a job to disk so a restart does not erase it.
+
+    The registry is per-process, and a development server restarts for all sorts
+    of reasons -- including, until recently, the run writing its own generated
+    tests. When that happened the client polling for a job got a bare 404 and
+    the run simply vanished, mid-flight, with no record that it had ever
+    started. A copy on disk means the poll can still say what happened.
+
+    Best-effort: failing to write a status file must never fail the run it is
+    describing.
+    """
+    try:
+        path = _job_file(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(job, default=str), encoding="utf-8")
+    except Exception:
+        logger.warning("could not persist job %s", job_id, exc_info=True)
+
+
+def _load_job(job_id: str) -> dict[str, Any] | None:
+    """Read a job this process does not have in memory.
+
+    Reaching disk at all means the job was started by a different process, so a
+    status of "running" is necessarily stale -- whatever thread was driving it
+    died with that process. Reported as "interrupted" rather than left claiming
+    to be in progress, which would have a client poll forever.
+    """
+    try:
+        path = _job_file(job_id)
+        if not path.exists():
+            return None
+        job = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    if job.get("status") == "running":
+        job = dict(
+            job,
+            status="interrupted",
+            error="The server restarted while this run was in progress, so it "
+            "did not finish. Nothing was corrupted -- start it again.",
+        )
+    return job
+
+
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -235,6 +285,8 @@ def _run_in_background(job_id: str, req: RunRequest) -> None:
                 return
             job["stage"] = decision.next_stage.value
             job["decisions"].append(decision.to_dict())
+            snapshot = dict(job)
+        _persist_job(job_id, snapshot)
 
     try:
         result = _execute(req, on_decision=observe)
@@ -250,6 +302,8 @@ def _run_in_background(job_id: str, req: RunRequest) -> None:
                 result=result,
             )
             _JOBS[job_id] = job
+            snapshot = dict(job)
+        _persist_job(job_id, snapshot)
     except Exception as e:  # a crash here must not take the server down
         logger.exception("background run failed")
         with _JOBS_LOCK:
@@ -261,6 +315,8 @@ def _run_in_background(job_id: str, req: RunRequest) -> None:
                 error=f"{type(e).__name__}: {e}",
             )
             _JOBS[job_id] = job
+            snapshot = dict(job)
+        _persist_job(job_id, snapshot)
 
 
 def _artifact(run_id: str, suffix: str) -> Path:
@@ -285,7 +341,7 @@ def create_run(req: RunRequest) -> Any:
     if req.background:
         job_id = uuid.uuid4().hex[:12]
         with _JOBS_LOCK:
-            _JOBS[job_id] = {
+            _JOBS[job_id] = _new_job = {
                 "status": "running",
                 "stage": "explore",
                 "run_id": None,
@@ -293,6 +349,7 @@ def create_run(req: RunRequest) -> Any:
                 "error": None,
                 "decisions": [],
             }
+        _persist_job(job_id, _new_job)
         threading.Thread(
             target=_run_in_background, args=(job_id, req), daemon=True
         ).start()
@@ -310,19 +367,11 @@ def get_job(job_id: str) -> dict[str, Any]:
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
     if job is None:
-        # The registry lives in memory, so a job id that was valid a moment ago
-        # and is unknown now means this process is not the one that started it.
-        # Under --reload the usual cause is the run's own output: writing the
-        # generated suite triggers a reload unless the watcher is pointed at the
-        # source only. Saying so beats a bare "unknown job".
-        raise HTTPException(
-            404,
-            f"No running job {job_id}. Jobs are tracked in memory, so a server "
-            f"restart loses them -- under --reload, start with "
-            f"`--reload-dir app` so writing the generated tests does not "
-            f"restart the server mid-run. Finished runs are on disk and in "
-            f"GET /runs regardless.",
-        )
+        # Not in this process. It may still have been recorded on disk by a
+        # previous one, which is what a development restart looks like.
+        job = _load_job(job_id)
+    if job is None:
+        raise HTTPException(404, f"Unknown job {job_id}")
     out = dict(job, job_id=job_id)
     if job.get("run_id"):
         out["run"] = f"/runs/{job['run_id']}"
